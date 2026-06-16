@@ -493,7 +493,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     match cmovCondOp ins.mn, (ins.ops.splitOn ",").map (·.trimAscii.toString) with
     | some op, [dst, src] =>
       match (List.range q).reverse.find? (fun k =>
-              let m := insns[k]!.mn; m == "cmp" ∨ m == "add" ∨ m == "sub") with
+              let m := insns[k]!.mn; m == "cmp" ∨ m == "add" ∨ m == "sub" ∨ m == "test") with
       | some ck =>
         let fk := insns[ck]!
         let csubs := (useToVer.get? ck).getD []
@@ -502,6 +502,12 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
           | [x, y] =>
             if fk.mn == "cmp" then
               some s!"{subOf csubs x} {op} {subOf csubs y}"
+            else if fk.mn == "test" then
+              -- `test x, y` sets ZF = ((x & y) == 0); only the ZF cmovs (==/!=)
+              -- are sound off it (it clears CF, so </>= would be wrong).
+              if op == "==" ∨ op == "!=" then
+                some s!"({subOf csubs x} & {subOf csubs y}) {op} 0"
+              else none
             else if op == "<" ∨ op == ">=" then
               -- CF off add/sub. `x` is the destination; its reaching read (old
               -- value) is in `csubs`; the add's result is the SSA def at `ck`.
