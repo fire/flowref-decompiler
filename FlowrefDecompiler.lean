@@ -694,13 +694,12 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- a setcc with no preceding flag-setter ⇒ refuse.
   let setccModeled := (Array.range nI).all (fun q =>
     ¬ insns[q]!.mn.startsWith "set" ∨ (setccRhs q insns[q]!).isSome)
-  -- At most ONE cmov: with two cmovs (clamp, max3) the first cmov's result feeds
-  -- the second `cmp`, but `cmovRhs` resolves that operand via the cmov-blind
-  -- reaching-def and picks the wrong SSA value. Refuse multi-cmov until the
-  -- reaching-def search is cmov-aware for cmp operands too.
-  let cmovCount := (insns.filter (fun i => i.mn.startsWith "cmov")).size
+  -- No cmov-count cap: a cmov result that feeds a later `cmp`/`cmov` is resolved
+  -- correctly now that the single-block reaching-def is cmov-aware (canonical
+  -- width keys + latest-def-before-use fallback). Each cmov must still resolve
+  -- (`cmovsModeled`); chains of any length lift soundly (e.g. med3 = 4 cmovs).
   let allModeled := a != .x86 ∨
-    (insns.all (fun i => modeledX86 i.mn) ∧ cmovsModeled ∧ setccModeled ∧ cmovCount ≤ 2)
+    (insns.all (fun i => modeledX86 i.mn) ∧ cmovsModeled ∧ setccModeled)
   let faithful := nB == 1 ∧ ¬ hasCall ∧ ¬ hasMemOp ∧ allModeled
   let mut out : String := cPreamble
   out := out ++ s!"\n/* flowref decompile @ 0x{hex fnVa} — {nI} insns, {nB} blocks, {defSites.size} SSA defs\n"
