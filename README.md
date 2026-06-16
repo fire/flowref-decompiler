@@ -32,8 +32,9 @@ lines (`defOf` / `useDisp` / `branchTarget` / `clobbers` / `isUncondJmp`).
 ## Build
 
 ```bash
-thirdparty/capstone/build.sh   # clone + build libcapstone.a once (needs git, cmake, a C compiler)
-lake build                     # builds the `flowref` executable
+lake update                                                  # fetch deps (incl. lean-capstone)
+.lake/packages/lean-capstone/thirdparty/capstone/build.sh    # build libcapstone.a once
+lake build                                                   # builds the `flowref` executable
 ```
 
 ## Usage
@@ -88,6 +89,6 @@ referencing code.
 
 ## License
 
-`flowref` is MIT-licensed (see `LICENSE`). The vendored Capstone headers under
-`thirdparty/capstone/include` are BSD-3-Clause (© the Capstone authors); the
-build script fetches the matching Capstone sources at build time.
+`flowref` is MIT-licensed (see `LICENSE`). Disassembly is provided by
+[`lean-capstone`](https://github.com/fire/lean-capstone), a separate dependency
+that wraps Capstone (BSD-3-Clause, © the Capstone authors).

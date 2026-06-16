@@ -1,4 +1,3 @@
 /.lake/
 /build/
-thirdparty/capstone/lib/*.a
 *.olean
