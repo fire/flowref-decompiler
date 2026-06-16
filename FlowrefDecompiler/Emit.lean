@@ -124,6 +124,12 @@ def renderExprC (a : A) (i : Ins) (subs : List (String × String)) : String :=
     if i.mn == "neg" ∨ i.mn == "not" then
       let d := ((i.ops.splitOn ",").headD "").trimAscii.toString
       if i.mn == "neg" then s!"0u - {d}" else s!"~ {d}"
+    else if i.mn == "imul" ∧ (i.ops.splitOn ",").length == 3 then
+      -- 3-operand `imul dst, src, imm` ⇒ dst := src * imm (the shared `rhsText`
+      -- only models the 2-operand form and would emit the raw comma-operand text).
+      match (i.ops.splitOn ",").map (·.trimAscii.toString) with
+      | [_, src, imm] => s!"{src} * {imm}"
+      | _             => rhsText a i
     else if (i.mn == "movzx" ∨ i.mn == "movsx") ∧ ¬ hasMem i.ops then
       if i.mn == "movzx" then
         if extW == "uint8_t" then s!"({extSrc}) & 0xff"
