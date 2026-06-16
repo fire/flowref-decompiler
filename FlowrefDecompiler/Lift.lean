@@ -74,32 +74,42 @@ def tokToOperand (t : String) : Operand :=
   | some i => .imm (BitVec.ofInt 32 i)
   | none   => .reg (canonReg t)
 
-/-- Lower a single decoded instruction to an `SInsn`, or refuse (`none`). -/
-def insToS (i : Ins) : Option SInsn :=
+/-- A scratch register for a memory operand fused into an ALU instruction. The
+SSA lifter versions each write, so reusing one name across instructions is safe. -/
+def scratch : String := "__t"
+
+/-- Lower a single decoded instruction to a *list* of `SInsn` (one x86
+instruction may expand to several IL ops, e.g. an ALU op with a memory operand
+becomes a load to a scratch register followed by the register ALU), or refuse
+(`none`). -/
+def insToS (i : Ins) : Option (List SInsn) :=
   let toks := (i.ops.splitOn ",").map (·.trimAscii.toString)
   match i.mn, toks with
-  | "ret", _    => some (.ret "rax")                       -- x86-64 returns in rax
+  | "ret", _    => some [.ret "rax"]                       -- x86-64 returns in rax
   | "lea", [d, m] =>
     -- `lea dst, [a + b]` is address arithmetic: dst := a + b (NOT a load).
     match parseOpd d with
     | some (.reg dr) =>
       let inner := (((m.splitOn "[").getD 1 "").splitOn "]").headD "" |>.trimAscii.toString
       match (inner.splitOn "+").map (·.trimAscii.toString) with
-      | [a, b] => some (.bin dr .add (tokToOperand a) (tokToOperand b))
-      | [a]    => some (.mov dr (tokToOperand a))
+      | [a, b] => some [.bin dr .add (tokToOperand a) (tokToOperand b)]
+      | [a]    => some [.mov dr (tokToOperand a)]
       | _      => none
     | _ => none
   | "mov", [d, s] =>
     match parseOpd d, parseOpd s with
-    | some (.reg dr),    some (.reg sr)     => some (.mov dr (.reg sr))
-    | some (.reg dr),    some (.imm w)      => some (.mov dr (.imm w))
-    | some (.reg dr),    some (.mem b disp) => some (.load dr b disp)        -- load
-    | some (.mem b disp), some (.reg sr)    => some (.store b disp sr)       -- store
+    | some (.reg dr),    some (.reg sr)     => some [.mov dr (.reg sr)]
+    | some (.reg dr),    some (.imm w)      => some [.mov dr (.imm w)]
+    | some (.reg dr),    some (.mem b disp) => some [.load dr b disp]        -- load
+    | some (.mem b disp), some (.reg sr)    => some [.store b disp sr]       -- store
     | _, _ => none
   | mn, [d, s]  =>
     match binOpOf mn, parseOpd d, parseOpd s with
-    | some op, some (.reg dr), some (.reg sr) => some (.bin dr op (.reg dr) (.reg sr))
-    | some op, some (.reg dr), some (.imm w)  => some (.bin dr op (.reg dr) (.imm w))
+    | some op, some (.reg dr), some (.reg sr) => some [.bin dr op (.reg dr) (.reg sr)]
+    | some op, some (.reg dr), some (.imm w)  => some [.bin dr op (.reg dr) (.imm w)]
+    -- ALU with a memory source operand: load it to a scratch, then the reg ALU.
+    | some op, some (.reg dr), some (.mem b disp) =>
+        some [.load scratch b disp, .bin dr op (.reg dr) (.reg scratch)]
     | _, _, _ => none
   | _, _ => none
 
@@ -107,7 +117,7 @@ def insToS (i : Ins) : Option SInsn :=
 instruction is outside the modelled subset. `argRegs` seeds the calling
 convention (SysV: `rdi, rsi, …`). -/
 def liftFn (argRegs : List String) (is : List Ins) : Option SProg :=
-  (is.mapM insToS).map (liftS argRegs)
+  (is.mapM insToS).map (fun lss => liftS argRegs lss.flatten)
 
 /-! ## Proof: the real decoded form of `BlockDevice::Lock()` lifts and is correct.
 
@@ -152,5 +162,32 @@ theorem liftFn_addLea_correct (mem : Mem) (a b : Word) :
   rw [liftFn_addLea_shape]
   simp only [Option.map_some, SProg.eval, sevalGo, Rhs.eval, Atom.eval, Op.apply,
              List.getD_cons_zero, List.getD_cons_succ, List.nil_append]
+
+/-! ## ALU with a memory operand: one instruction → load + register ALU.
+
+`add eax, [rdi]` reads `*p` and adds it. The adapter expands it to a scratch
+load followed by a register add — so a memory-source ALU instruction becomes
+provable IL. -/
+
+/-- `add_mem(p, b){ return *p + b; }`: `mov eax, esi; add eax, [rdi]; ret`. -/
+def addMemIns : List Ins :=
+  [ { addr := 0x3000, mn := "mov", ops := "eax, esi" },
+    { addr := 0x3002, mn := "add", ops := "eax, [rdi]" },
+    { addr := 0x3005, mn := "ret", ops := "" } ]
+
+/-- The memory-source `add` lifts to: `s0 := *p`, `s1 := b + s0`. -/
+theorem liftFn_addMem_shape :
+    liftFn ["rdi", "rsi"] addMemIns
+      = some { stmts := [.bind (.load (.arg 0)), .bind (.alu .add (.arg 1) (.slot 0))],
+               ret := .slot 1 } := by
+  native_decide
+
+/-- Hence the lifted program computes `b + *p` (= `mem p + b`, modulo `+` comm)
+for **all** memories and inputs. -/
+theorem liftFn_addMem_correct (mem : Mem) (p b : Word) :
+    (liftFn ["rdi", "rsi"] addMemIns).map (fun q => q.eval mem [p, b]) = some (b + mem p) := by
+  rw [liftFn_addMem_shape]
+  simp only [Option.map_some, SProg.eval, sevalGo, Rhs.eval, Atom.eval, Op.apply,
+             List.getD_cons_zero, List.getD_cons_succ, List.nil_append, List.cons_append]
 
 end FlowrefDecompiler.Lift
