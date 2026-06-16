@@ -311,4 +311,49 @@ theorem store_two_correct (mem : Mem) (p a b : Word) :
              List.getD_cons_zero, List.getD_cons_succ, List.nil_append, List.cons_append]
   bv_decide
 
+/-! ### Rendering stores to Slang statements, proved meaning-preserving.
+
+Stores are statements, so this renderer emits a `List SlangStmt` (named SSA
+locals + `mem[idx] = val` assigns + a `return`) rather than one inlined
+expression, and we prove it against `LeanSlang.evalStmtsU32M` — the statement
+semantics. Slots become named locals `sᵢ`; stores become buffer assigns. -/
+
+/-- The Slang local name for SSA slot `i`. -/
+@[simp] def slotName (i : Nat) : String := "s" ++ toString i
+
+/-- Atom → Slang expression for the statement path: slots are *named locals*. -/
+@[simp] def Atom.toSlangS : Atom → SlangExpr
+  | .arg i  => .var (argName i)
+  | .slot i => .var (slotName i)
+  | .imm w  => .litUint w.toNat
+
+/-- Rhs → Slang expression (ALU → `bin`, load → `mem[addr]`). -/
+@[simp] def Rhs.toSlangS : Rhs → SlangExpr
+  | .alu op a b => .bin op.slangOp a.toSlangS b.toSlangS
+  | .load addr  => .index (.var "mem") addr.toSlangS
+
+/-- Emit statements, naming each bound slot `sₖ`; stores don't advance `k`. -/
+@[simp] def srenderGo (k : Nat) : List Stmt → List SlangStmt
+  | [] => []
+  | .bind rhs  :: rest => .declare (.scalar .uint) (slotName k) (some rhs.toSlangS) :: srenderGo (k+1) rest
+  | .store a v :: rest => .assign (.index (.var "mem") a.toSlangS) v.toSlangS :: srenderGo k rest
+
+/-- Memory-IL program → a Slang statement body ending in `return ret;`. -/
+@[simp] def SProg.render (p : SProg) : List SlangStmt :=
+  srenderGo 0 p.stmts ++ [.ret (some p.ret.toSlangS)]
+
+/-- render-correctness for stores: the emitted Slang statement body means exactly
+what the memory-IL means, for **all** memories (aliasing closed by `bv_decide`). -/
+theorem store_two_render (mem : Mem) (p a b : Word) :
+    evalStmtsU32M
+      (fun n => if n = "a0" then p else if n = "a1" then a else if n = "a2" then b else 0)
+      (memEnv mem) (store_two.render)
+      = some (store_two.eval mem [p, a, b]) := by
+  simp +decide only [store_two, SProg.render, srenderGo, Rhs.toSlangS, Atom.toSlangS,
+             Op.slangOp, slotName, argName, evalStmtsU32M, SlangExpr.evalU32M, binOpU32,
+             UEnv.set, MEnv.store, memEnv, SProg.eval, sevalGo, Rhs.eval, Atom.eval, Op.apply,
+             Mem.upd, List.getD_cons_zero, List.getD_cons_succ, List.nil_append, List.cons_append,
+             reduceIte, Option.some.injEq,]
+  bv_decide
+
 end FlowrefDecompiler.IL
