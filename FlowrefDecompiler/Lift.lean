@@ -148,23 +148,32 @@ def lowerCmov (mn dst src : String) (c : String × String) : Option (List SInsn)
 /-- Lower an instruction list to `SInsn`, threading the last `cmp`'s operands so
 `cmovcc` can be fused. Refuses (`none`) on an unmodelled instruction or a
 `cmovcc` with no preceding `cmp`. -/
-def fuse (cmp : Option (String × String)) : List Ins → Option (List SInsn)
+def fuse (argRegs : List String) (cmp : Option (String × String)) : List Ins → Option (List SInsn)
   | []        => some []
   | i :: rest =>
     if i.mn == "cmp" then
-      (cmpOps i).bind (fun ab => fuse (some ab) rest)
+      (cmpOps i).bind (fun ab => fuse argRegs (some ab) rest)
+    else if i.mn == "call" then
+      -- A `call <callee>` forwards this function's parameter registers to the
+      -- callee (the faithful model for a forwarding/partial-application leaf such
+      -- as `apply_f(x)=f(x)` or `lcm`'s `gcd(a,b)` call). The callee result lands
+      -- in `rax` (SInsn.call). The callee's denotation is the uninterpreted
+      -- summary `ce`, so the lift is correct for ALL callees.
+      let callee := i.ops.trimAscii.toString
+      (fuse argRegs none rest).map (SInsn.call callee argRegs :: ·)
     else if i.mn.startsWith "cmov" then
       match cmp, (i.ops.splitOn ",").map (·.trimAscii.toString) with
-      | some ab, [d, s] => (lowerCmov i.mn d s ab).bind (fun pre => (fuse none rest).map (pre ++ ·))
+      | some ab, [d, s] => (lowerCmov i.mn d s ab).bind (fun pre => (fuse argRegs none rest).map (pre ++ ·))
       | _, _ => none
     else
-      (insToS i).bind (fun ss => (fuse none rest).map (ss ++ ·))
+      (insToS i).bind (fun ss => (fuse argRegs none rest).map (ss ++ ·))
 
 /-- Lift a whole decoded function region to an IL `SProg`, or refuse if any
 instruction is outside the modelled subset. `argRegs` seeds the calling
-convention (SysV: `rdi, rsi, …`). `cmp`/`cmovcc` are fused by `fuse`. -/
+convention (SysV: `rdi, rsi, …`). `cmp`/`cmovcc` are fused by `fuse`; a `call`
+forwards `argRegs` to the callee. -/
 def liftFn (argRegs : List String) (is : List Ins) : Option SProg :=
-  (fuse none is).map (liftS argRegs)
+  (fuse argRegs none is).map (liftS argRegs)
 
 /-! ## Proof: the real decoded form of `BlockDevice::Lock()` lifts and is correct.
 
@@ -310,5 +319,28 @@ theorem liftFn_umin_is_lb (mem : Mem) (a b : Word) {p : SProg}
   simp only [SProg.eval, sevalGo, Rhs.eval, Atom.eval, Op.apply,
              List.getD_cons_zero, List.getD_cons_succ, List.nil_append, List.cons_append]
   bv_decide
+
+/-! ## A function CALL, lifted from real decoded `Ins` and proved for all callees.
+
+`uint32_t apply_f(uint32_t x){ return f(x); }` compiles (SysV, `x` in `rdi`) to
+`call f ; ret`. The adapter parses the `call` into `SInsn.call "f" ["rdi"]`
+(forwarding the parameter register), and the lifted program's recovered value is
+`ce "f" [x]` for **any** callee summary `ce` — the decode→IL→proof path now
+covers calls, not just straight-line/flag leaves. -/
+def applyfFnIns : List Ins :=
+  [ { addr := 0x7000, mn := "call", ops := "f" },
+    { addr := 0x7005, mn := "ret",  ops := "" } ]
+
+/-- The `call`+`ret` form lifts to the single-call IL shape. -/
+theorem liftFn_applyf_shape :
+    liftFn ["rdi"] applyfFnIns
+      = some { stmts := [.call "f" [.arg 0]], ret := .slot 0 } := by
+  native_decide
+
+/-- Hence the lifted call computes `f(x)` for **all** callees `ce`. -/
+theorem liftFn_applyf_correct (ce : CallEnv) (mem : Mem) (x : Word) :
+    (liftFn ["rdi"] applyfFnIns).map (fun p => p.eval mem [x] ce) = some (ce "f" [x]) := by
+  rw [liftFn_applyf_shape]
+  simp [SProg.eval, sevalGo, Atom.eval]
 
 end FlowrefDecompiler.Lift
