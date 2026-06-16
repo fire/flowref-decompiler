@@ -47,6 +47,45 @@ def run (cmd : String) (args : Array String) : IO (Bool × String) := do
   let out ← IO.Process.output { cmd := cmd, args := args }
   pure (out.exitCode == 0, out.stderr)
 
+/-- `ref` and `cand` agree on the 6-arg vector `v` (missing slots are 0). -/
+def agreeOn (v : Array UInt32) : Bool :=
+  let g := fun (h : UInt32→UInt32→UInt32→UInt32→UInt32→UInt32→UInt32) =>
+    h (v.getD 0 0) (v.getD 1 0) (v.getD 2 0) (v.getD 3 0) (v.getD 4 0) (v.getD 5 0)
+  g refCall == g candCall
+
+/-- Boundary values that expose width/sign/truncation bugs the random sampler
+misses: sub-register edges (255/256, 0xffff/0x10000), sign edges (0x7fffffff,
+0x80000000), and the extremes. A size-biased PRNG almost never reaches these —
+e.g. a dropped `movzx` truncation only diverges at args ≥ 256. -/
+def boundaryVals : List UInt32 :=
+  [0, 1, 2, 3, 7, 255, 256, 257, 4095, 4096, 0x7fff, 0x8000, 0xffff, 0x10000,
+   0x7fffffff, 0x80000000, 0x80000001, 0xfffffffe, 0xffffffff,
+   100, 1000, 0x12345678, 0x9abcdef0, 0xdeadbeef]
+
+/-- Search for an argument vector on which `ref` and `cand` differ. Deterministic
+boundary battery first (single-axis sweeps over `boundaryVals` against a distinct
+non-zero base, the all-equal diagonal, and pairwise on the first two axes —
+catches truncation/width bugs and arg-mixing bugs), then `rnd` full-range random
+vectors (`IO.rand` over the whole `uint32`). `none` ⇒ agree everywhere tested. -/
+def findMismatch (rnd : Nat) : IO (Option (Array UInt32)) := do
+  let base : Array UInt32 := #[1, 2, 3, 4, 5, 6]
+  -- diagonal + single-axis sweeps + pairwise(0,1)
+  let mut vecs : List (Array UInt32) := boundaryVals.map (fun b => #[b,b,b,b,b,b])
+  for i in [0:6] do
+    for b in boundaryVals do vecs := (base.set! i b) :: vecs
+  for a in boundaryVals do
+    for b in boundaryVals do vecs := (((base.set! 0 a).set! 1 b)) :: vecs
+  for v in vecs do
+    if ¬ agreeOn v then return some v
+  -- full-range random sweep
+  for _ in [0:rnd] do
+    let mut v : Array UInt32 := #[]
+    for _ in [0:6] do
+      let r ← IO.rand 0 0xffffffff
+      v := v.push (UInt32.ofNat r)
+    if ¬ agreeOn v then return some v
+  return none
+
 def main (argv : List String) : IO Unit := do
   match argv with
   | [bin, arch, fnS, foS, vaS, lenS] => do
@@ -88,23 +127,19 @@ def main (argv : List String) : IO Unit := do
       IO.println "INCOMPARABLE  (candidate C did not compile)"; IO.eprint cerr; IO.Process.exit 3
     if ¬ (← equivLoadCand soPath) then
       IO.println "INCOMPARABLE  (could not load candidate)"; IO.Process.exit 3
-    -- 4. Plausible counterexample search over a SINGLE 6-tuple forall (one level
-    --    ⇒ numInst whole-tuple samples ⇒ linear, bounded time), iteratively
-    --    deepened. Six args cover the SysV integer-arg registers.
+    -- 4. Differential search for a divergent argument vector: a DETERMINISTIC
+    --    boundary battery (sub-register/sign/extreme edges, which a size-biased
+    --    random sampler almost never reaches — e.g. a dropped `movzx` truncation
+    --    only diverges at args ≥ 256) followed by a full-range random sweep. Six
+    --    args cover the SysV integer-arg registers; a counterexample IS disproof.
     let ar := candArity cand hexName
-    let ladder : List Nat := [256, 4096, 50000]
-    for n in ladder do
-      let r ← Testable.checkIO
-        (NamedBinder "args" (∀ t : Fin 65536 × Fin 65536 × Fin 65536 × Fin 65536 × Fin 65536 × Fin 65536,
-          (refCall  (UInt32.ofNat t.1.val) (UInt32.ofNat t.2.1.val) (UInt32.ofNat t.2.2.1.val)
-                    (UInt32.ofNat t.2.2.2.1.val) (UInt32.ofNat t.2.2.2.2.1.val) (UInt32.ofNat t.2.2.2.2.2.val)
-           == candCall (UInt32.ofNat t.1.val) (UInt32.ofNat t.2.1.val) (UInt32.ofNat t.2.2.1.val)
-                    (UInt32.ofNat t.2.2.2.1.val) (UInt32.ofNat t.2.2.2.2.1.val) (UInt32.ofNat t.2.2.2.2.2.val)) = true))
-        { numInst := n, quiet := true }
-      if r.isFailure then
-        IO.println s!"NOT-EQUIVALENT  (plausible counterexample at L{n}, arity {ar})"
-        IO.Process.exit 1
-    IO.println s!"EQUIVALENT  (no counterexample; plausible-searched to {ladder.getLastD 0} instances, arity {ar})"
+    let rnd := 50000
+    match ← findMismatch rnd with
+    | some v =>
+      IO.println s!"NOT-EQUIVALENT  (divergent args {v.toList.take (max ar 1)}, arity {ar})"
+      IO.Process.exit 1
+    | none =>
+      IO.println s!"EQUIVALENT  (no divergence; boundary battery + {rnd} random full-range vectors, arity {ar})"
   | _ =>
     IO.eprintln "usage: flowref-equiv <binary> <arch> <fnVaddrHex> <fileOffHex> <vaddrHex> <lenHex>"
     IO.Process.exit 2

@@ -112,10 +112,27 @@ def renderExprC (a : A) (i : Ins) (subs : List (String × String)) : String :=
   -- `neg`/`not` are single-operand defs the shared `rhsText` does not model (it
   -- returns the raw operand). Render the unary as C over the operand register, so
   -- after substitution `neg eax` → `(0u - eax_0)`, `not eax` → `(~ eax_0)`.
+  -- `movzx`/`movsx dst, src` extend a NARROWER source to 32/64 bits. The shared
+  -- `rhsText` returns the bare `src`, which silently DROPS the truncation/sign —
+  -- e.g. `movzx eax, dil` would read as `eax = a0` (full 32 bits) instead of
+  -- `a0 & 0xff`. Model the source width (from its register type): zero-extend with
+  -- a mask, sign-extend with the signed-cast chain. (Register sources only; a
+  -- memory source goes through the `hasMem` load path below.)
+  let extSrc := (((i.ops.splitOn ",").getD 1 "")).trimAscii.toString
+  let extW := regCType extSrc
   let raw :=
     if i.mn == "neg" ∨ i.mn == "not" then
       let d := ((i.ops.splitOn ",").headD "").trimAscii.toString
       if i.mn == "neg" then s!"0u - {d}" else s!"~ {d}"
+    else if (i.mn == "movzx" ∨ i.mn == "movsx") ∧ ¬ hasMem i.ops then
+      if i.mn == "movzx" then
+        if extW == "uint8_t" then s!"({extSrc}) & 0xff"
+        else if extW == "uint16_t" then s!"({extSrc}) & 0xffff"
+        else extSrc
+      else  -- movsx: truncate to the signed source width, then sign-extend
+        if extW == "uint8_t" then s!"(uint32_t)(int8_t)({extSrc})"
+        else if extW == "uint16_t" then s!"(uint32_t)(int16_t)({extSrc})"
+        else extSrc
     else rhsText a i
   if i.mn == "lea" then
     -- `lea dst, [expr]` computes the ADDRESS `expr` — it is register arithmetic,
