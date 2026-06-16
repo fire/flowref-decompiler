@@ -387,4 +387,29 @@ theorem umax_render (mem : Mem) (a b : Word) :
     (umax.render).evalU32M (env2 a b) (memEnv mem) = some (umax.eval mem [a, b]) := by
   simp +decide [umax, env2, MProg.eval, mevalGo]
 
+/-! ### Branching `if`/return: rendering a terminal select as control flow.
+
+A terminal conditional can render two ways: an expression `ternary` (above), or
+a branching statement `if (c) return x; else return y;`. This proves the latter
+form against `LeanSlang.evalStmtsU32M` — real `SlangStmt.ifThen` control flow,
+meaning-preserving against the same IL `sel`. -/
+
+/-- A terminal select rendered as a branching `if`/return statement body. -/
+@[simp] def selBranch (c x y : Atom) : List SlangStmt :=
+  [ .ifThen c.toSlangS [ .ret (some x.toSlangS) ] [ .ret (some y.toSlangS) ] ]
+
+/-- `uint32_t cond_sel(uint32_t c, uint32_t x, uint32_t y){ return c ? x : y; }`. -/
+def cond_sel : MProg := { binds := [ sel (arg 0) (arg 1) (arg 2) ], ret := slot 0 }
+
+/-- The branching `if`/return render means exactly the IL select, for all inputs. -/
+theorem cond_sel_render_branch (mem : Mem) (c x y : Word) :
+    evalStmtsU32M
+      (fun n => if n = "a0" then c else if n = "a1" then x else if n = "a2" then y else 0)
+      (memEnv mem) (selBranch (arg 0) (arg 1) (arg 2))
+      = some (cond_sel.eval mem [c, x, y]) := by
+  simp only [cond_sel, selBranch, Atom.toSlangS, argName, evalStmtsU32M, SlangExpr.evalU32M,
+             MProg.eval, mevalGo, Rhs.eval, Atom.eval,
+             List.getD_cons_zero, List.getD_cons_succ, List.nil_append]
+  exact (apply_ite some (c ≠ 0) x y).symm
+
 end FlowrefDecompiler.IL

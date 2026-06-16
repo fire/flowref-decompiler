@@ -5,7 +5,7 @@
    "type": "git",
    "subDir": null,
    "scope": "",
-   "rev": "a96a10e0940a7d55f99c4d39f07d9c208029eb46",
+   "rev": "c9c21d3bd4dbaa26298a8f97db85c1a7ebddd4f9",
    "name": "LeanSlang",
    "manifestFile": "lake-manifest.json",
    "inputRev": "main",
