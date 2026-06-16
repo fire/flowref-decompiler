@@ -17,8 +17,9 @@ SRCDIR="$here/algorithms"
 # multi-cmov, counted loops, data-dependent loops, then a call. Keep in sync with
 # the files in algorithms/ (each file defines exactly the function it is named).
 FUNCS="id32 add2 umax umin abs_diff gray_code avg_floor \
-       isolate_lowest_bit clear_lowest_bit clamp max3 sat_add \
-       sum_to_n factorial fib_iter popcount log2_floor reverse_bits \
+       isolate_lowest_bit clear_lowest_bit clamp max3 min3 sat_add sat_sub diff_or_zero \
+       parity bit_merge \
+       sum_to_n factorial fib_iter popcount log2_floor reverse_bits ctz digit_count \
        gcd isqrt pow_uint is_prime collatz_steps lcm"
 
 total=0; proven=0; unsafe_ok=0; violations=0
