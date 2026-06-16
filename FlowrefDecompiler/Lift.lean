@@ -343,4 +343,29 @@ theorem liftFn_applyf_correct (ce : CallEnv) (mem : Mem) (x : Word) :
   rw [liftFn_applyf_shape]
   simp [SProg.eval, sevalGo, Atom.eval]
 
+/-! ### A call COMPOSED with ALU: `g(x) + x`, lifted and proved for all callees.
+
+`call f ; add rax, rdi ; ret` — the callee result (in `rax`) is combined with the
+preserved argument register. This shows the call IL composes with the arithmetic
+IL: the recovered value is `ce "f" [x] + x` for **any** callee `ce`, by the same
+decode→IL→proof path. (64-bit `rax`/`rdi` so the call result and the add operand
+share the register the call writes — the lifter is register-name exact.) -/
+def callAddIns : List Ins :=
+  [ { addr := 0x8000, mn := "call", ops := "f" },
+    { addr := 0x8005, mn := "add",  ops := "rax, rdi" },
+    { addr := 0x8008, mn := "ret",  ops := "" } ]
+
+/-- The call+add form lifts to a call binding followed by an ALU binding. -/
+theorem liftFn_callAdd_shape :
+    liftFn ["rdi"] callAddIns
+      = some { stmts := [.call "f" [.arg 0], .bind (.alu .add (.slot 0) (.arg 0))],
+               ret := .slot 1 } := by
+  native_decide
+
+/-- Hence the lifted `call f; add rax,rdi` computes `f(x) + x` for **all** callees. -/
+theorem liftFn_callAdd_correct (ce : CallEnv) (mem : Mem) (x : Word) :
+    (liftFn ["rdi"] callAddIns).map (fun p => p.eval mem [x] ce) = some (ce "f" [x] + x) := by
+  rw [liftFn_callAdd_shape]
+  simp [SProg.eval, sevalGo, Rhs.eval, Atom.eval, Op.apply]
+
 end FlowrefDecompiler.Lift
