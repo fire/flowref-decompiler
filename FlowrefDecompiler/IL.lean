@@ -412,4 +412,34 @@ theorem cond_sel_render_branch (mem : Mem) (c x y : Word) :
              List.getD_cons_zero, List.getD_cons_succ, List.nil_append]
   exact (apply_ite some (c ≠ 0) x y).symm
 
+/-! ## Bounded loops: a fixed trip count unrolls to straight-line IL.
+
+A `while`/`for` with a *symbolic* bound needs a loop invariant + induction —
+outside what `bv_decide` discharges. But a loop with a *constant* trip count is
+**unrolled** into straight-line bindings, which `bv_decide` proves like any
+other leaf. This is faithful: flowref unrolls fixed-count loops, so the proof
+obligation is the unrolled body. (Symbolic-bound loops are the next regime, and
+require a different technique — noted, not faked.) -/
+
+/-- `uint32_t times8(uint32_t x){ for (i=0;i<3;i++) x += x; return x; }` —
+the 3-iteration loop unrolled to three doubling bindings. -/
+def times8 : Prog :=
+  { binds := [ ⟨add, arg 0, arg 0⟩      -- iter 0: 2x
+             , ⟨add, slot 0, slot 0⟩    -- iter 1: 4x
+             , ⟨add, slot 1, slot 1⟩ ]  -- iter 2: 8x
+  , ret := slot 2 }
+
+/-- The unrolled loop computes `x <<< 3` (= 8·x), for **all** `x`, by `bv_decide` —
+the closed form of the bounded loop. -/
+theorem times8_correct (x : Word) : times8.eval [x] = 8 * x := by
+  simp only [times8, Prog.eval, evalGo, Atom.eval, Op.apply,
+             List.getD_cons_zero, List.getD_cons_succ, List.nil_append, List.cons_append]
+  bv_decide
+
+/-- render-correctness: the emitted Slang for the unrolled loop means exactly
+`times8.eval` — bounded loops reuse the existing expression render. -/
+theorem times8_render (x : Word) :
+    (times8.render).evalU32 (env2 x 0) = some (times8.eval [x]) := by
+  simp +decide [times8, env2, Prog.eval, evalGo]
+
 end FlowrefDecompiler.IL
