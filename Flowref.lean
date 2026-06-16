@@ -5,6 +5,7 @@ import Flowref.Ports
 import Flowref.Decoders
 import Flowref.Adapters
 import Plausible
+import Lean.Data.Json
 
 /-! # flowref — control-flow-aware xref **and** a plausible-driven decompiler
 
@@ -24,11 +25,17 @@ The emitter (`Flowref/Emit.lean`) lowers the recovered facts into C that
 -/
 
 open Plausible Flowref
+open Lean (Json toJson)
 
 /-- Version string. -/
 def flowrefVersion : String :=
   "flowref 1.1.0 — control-flow-aware xref + plausible-driven decompiler with a " ++
   "calling-convention parameter model (SysV x86-64 + cdecl x86-32)"
+
+/-- `--json` output uses `Lean.Json` (toolchain `Lean.Data.Json`) so string
+escaping and rendering are the library's, not ours. `jn` is a small alias for
+turning a `Nat` into a JSON number. -/
+def jn (n : Nat) : Json := toJson n
 
 /-- Full usage text. -/
 def usageText : String :=
@@ -61,6 +68,7 @@ def usageText : String :=
   "                    flowref --demo --emit-c | gcc -xc -std=c11 -w -fsyntax-only -\n" ++
   "  --search-trace  print the iterative-deepening escalation chain to stderr\n" ++
   "  --arch=<a>      force the arch for the ELF short forms (else read from header)\n" ++
+  "  --json          machine-readable output for list / decompile / xref (stdout)\n" ++
   "  --help, -h      this help\n" ++
   "\nNOTE: decompile writes the C to stdout and all notes/traces to stderr, so\n" ++
   "  flowref decompile a.out main | gcc -xc -std=c11 -w -fsyntax-only -\n" ++
@@ -406,9 +414,28 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   out := out ++ "  return " ++ cName retReg ++ ";\n}\n"
   pure (out, trace)
 
-/-- Pretty (commented) decompile to stdout, plus optional trace to stderr. -/
-def decompileInsns (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) (showTrace : Bool) : IO Unit := do
+/-- Extract the recovered C signature line (`uint32_t sub_…(…)`) from a TU, or
+`""` if absent. Used for the `--json` `signature` field. -/
+def signatureOf (c : String) : String :=
+  match (c.splitOn "\nuint32_t sub_").getLast? with
+  | some tail => ("uint32_t sub_" ++ ((tail.splitOn ")").headD "") ++ ")")
+  | none => ""
+
+/-- Pretty (commented) decompile to stdout, plus optional trace to stderr.
+With `json`, emit a single `{signature, c, trace}` object instead of raw C. -/
+def decompileInsns (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat)
+    (showTrace : Bool) (json : Bool := false) : IO Unit := do
   let (c, trace) ← emitC a bits insns fnVa
+  if json then
+    let traceJson := trace.map (fun te =>
+      let oc := match te.outcome with
+        | .found w => s!"resolved (witness def-idx {w})"
+        | .provablyNone => "provably-none"
+        | .budgetHit => "budget-hit"
+      Json.mkObj [("query", Json.str te.query), ("level", jn te.level), ("outcome", Json.str oc)])
+    IO.println (Json.mkObj [("signature", Json.str (signatureOf c)),
+      ("c", Json.str c), ("trace", Json.arr traceJson)]).compress
+    return
   IO.print c
   if showTrace then
     IO.eprintln "=== iterative-deepening search trace ==="
@@ -527,15 +554,26 @@ def demoParams (emitC? : Bool) : IO Unit := do
 /-- `flowref list <bin>` — read the ELF and print the detected arch plus the
 FUNC symbols (name, vaddr, size). This is the discovery menu you pick from for
 `decompile <bin> <name>`. Fails cleanly if `bin` is not an ELF. -/
-def runList (bin : String) : IO Unit := do
+def runList (bin : String) (json : Bool := false) : IO Unit := do
   match ← readElf bin with
-  | none => IO.eprintln s!"error: '{bin}' is not a readable ELF"; IO.Process.exit 3
+  | none =>
+    if json then IO.println (Json.mkObj [("error", Json.str s!"'{bin}' is not a readable ELF")]).compress
+    else IO.eprintln s!"error: '{bin}' is not a readable ELF"
+    IO.Process.exit 3
   | some info =>
     let archTok := info.arch
-    let archShow := if archTok.isEmpty then s!"unknown (e_machine={info.machine})" else archTok
     let cls := if info.is64 then "ELF64" else "ELF32"
     let endian := if info.littleEndian then "LE" else "BE"
     let fns := info.functions
+    if json then
+      let fnsJson := fns.map (fun fn => Json.mkObj
+        [("name", Json.str fn.name), ("vaddr", jn fn.vaddr), ("size", jn fn.size)])
+      IO.println (Json.mkObj [("file", Json.str bin), ("class", Json.str cls),
+        ("endian", Json.str endian), ("arch", Json.str archTok),
+        ("entry", jn info.entry), ("functionCount", jn fns.size),
+        ("functions", Json.arr fnsJson)]).compress
+      return
+    let archShow := if archTok.isEmpty then s!"unknown (e_machine={info.machine})" else archTok
     IO.println s!"{bin}: {cls} {endian}  arch={archShow}  entry=0x{hex info.entry}  functions={fns.size}"
     if fns.isEmpty then
       IO.println "  (no FUNC symbols — binary may be stripped; use the explicit-region form)"
@@ -547,6 +585,7 @@ def runList (bin : String) : IO Unit := do
 def main (args : List String) : IO Unit := do
   let hasFlag := fun (f : String) => args.contains f
   let showTrace := hasFlag "--search-trace"
+  let asJson := hasFlag "--json"
   -- `--arch=<tok>` forces the arch for the ELF-resolved short forms (rare:
   -- a misidentified e_machine). Otherwise the arch comes from the ELF header.
   let archOverride? := (args.find? (·.startsWith "--arch=")).map (·.drop 7 |>.toString)
@@ -573,27 +612,27 @@ def main (args : List String) : IO Unit := do
     return
   match positional with
   -- ── list (ELF discovery) ────────────────────────────────────────────────
-  | "list" :: bin :: _ => guard (runList bin)
+  | "list" :: bin :: _ => guard (runList bin asJson)
   -- ── decompile ──────────────────────────────────────────────────────────
   -- ELF short form: resolve a symbol/address to a region from the headers.
   | ["decompile", bin, target] =>
-    guard (runDecompileElf bin target archOverride? showTrace)
+    guard (runDecompileElf bin target archOverride? showTrace asJson)
   | "decompile" :: bin :: archS :: fnS :: foS :: vaS :: lenS :: _ =>
-    guard (runDecompile (binaryFileAdapter bin archS foS vaS lenS) fnS showTrace)
+    guard (runDecompile (binaryFileAdapter bin archS foS vaS lenS) fnS showTrace asJson)
   | "decompile-asm" :: path :: archS :: fnS :: _ =>
-    guard (runDecompile (asmFileAdapter archS path) fnS showTrace)
+    guard (runDecompile (asmFileAdapter archS path) fnS showTrace asJson)
   -- ── xref ───────────────────────────────────────────────────────────────
   -- ELF short form: <bin> <fnSym|fnAddr> <targetHex> — region from the ELF,
   -- target is what to find references to.
   | ["xref", bin, fnTarget, tgtS] =>
-    guard (xrefElf bin fnTarget tgtS archOverride? showTrace)
+    guard (xrefElf bin fnTarget tgtS archOverride? showTrace asJson)
   | "xref" :: bin :: archS :: tgtS :: foS :: vaS :: lenS :: _ =>
-    guard (xref (binaryFileAdapter bin archS foS vaS lenS) tgtS showTrace)
+    guard (xref (binaryFileAdapter bin archS foS vaS lenS) tgtS showTrace asJson)
   | "xref-asm" :: path :: archS :: tgtS :: _ =>
-    guard (xref (asmFileAdapter archS path) tgtS showTrace)
+    guard (xref (asmFileAdapter archS path) tgtS showTrace asJson)
   -- ── legacy positional xref ─────────────────────────────────────────────
   | bin :: archS :: tgtS :: foS :: vaS :: lenS :: _ =>
-    guard (xref (binaryFileAdapter bin archS foS vaS lenS) tgtS showTrace)
+    guard (xref (binaryFileAdapter bin archS foS vaS lenS) tgtS showTrace asJson)
   | _ => IO.eprintln usageText; IO.Process.exit 2
 where
   /-- Run an analysis action, mapping any `IO` error to a clean message + exit 4.
@@ -606,32 +645,33 @@ where
   to stderr, then decompile that region. The function vaddr to carve is the
   resolved region's vaddr. -/
   runDecompileElf (bin target : String) (archOverride? : Option String)
-      (showTrace : Bool) : IO Unit := do
+      (showTrace json : Bool) : IO Unit := do
     let r ← elfResolveRegion bin target archOverride?
     let symNote := match r.symbol with | some s => s!" ({s})" | none => ""
+    -- Resolution note goes to stderr, so JSON stdout stays a single clean object.
     IO.eprintln s!"resolved{symNote}: arch={r.arch} vaddr=0x{hex r.vaddr} fileOff=0x{hex r.fileOff} len=0x{hex r.len}"
     let (a, bits, insns) ← (elfBinaryAdapter r bin).run
     if insns.isEmpty then IO.eprintln "error: empty disassembly for the resolved region"; IO.Process.exit 3
-    decompileInsns a bits insns r.vaddr showTrace
+    decompileInsns a bits insns r.vaddr showTrace json
   /-- ELF-resolved xref: resolve a function region from `(bin, fnTarget)`, then
   search it for def→use witnesses reaching `tgtS`. -/
   xrefElf (bin fnTarget tgtS : String) (archOverride? : Option String)
-      (showTrace : Bool) : IO Unit := do
+      (showTrace json : Bool) : IO Unit := do
     let r ← elfResolveRegion bin fnTarget archOverride?
     let symNote := match r.symbol with | some s => s!" ({s})" | none => ""
     IO.eprintln s!"resolved region{symNote}: arch={r.arch} vaddr=0x{hex r.vaddr} fileOff=0x{hex r.fileOff} len=0x{hex r.len}"
-    xref (elfBinaryAdapter r bin) tgtS showTrace
+    xref (elfBinaryAdapter r bin) tgtS showTrace json
   /-- Decompile whatever a `SourceAdapter` yields to compilable C. -/
-  runDecompile (adapter : SourceAdapter) (fnS : String) (showTrace : Bool) : IO Unit := do
+  runDecompile (adapter : SourceAdapter) (fnS : String) (showTrace json : Bool) : IO Unit := do
     let fnVa ← match parseImm? fnS with
       | some v => if v < 0 then throw (IO.userError s!"fnVaddr must be non-negative, got '{fnS}'") else pure v.toNat
       | none => throw (IO.userError s!"invalid fnVaddr '{fnS}' (expected hex like 0x401010 or a decimal)")
     let (a, bits, insns) ← adapter.run
     if insns.isEmpty then IO.eprintln "error: empty disassembly for the given region"; IO.Process.exit 3
-    decompileInsns a bits insns fnVa showTrace
+    decompileInsns a bits insns fnVa showTrace json
   /-- The ORIGINAL behaviour: a single-target def→use witness search, now with
   iterative deepening over the CFG-walk budget, over any `SourceAdapter`. -/
-  xref (adapter : SourceAdapter) (tgtS : String) (showTrace : Bool) : IO Unit := do
+  xref (adapter : SourceAdapter) (tgtS : String) (showTrace json : Bool) : IO Unit := do
     let target : Int ← match parseImm? tgtS with
       | some v => pure v
       | none => throw (IO.userError s!"invalid target '{tgtS}' (expected hex like 0x401010 or a decimal)")
@@ -671,10 +711,12 @@ where
       match defOf a insns[i]! with
       | some (r, v) => if (target - v).toNat < 0x10000 ∨ v == target then some (i, r, v) else none
       | none => none)
-    IO.println s!"insns={nI}, def-witness candidates={defs.size}, target=0x{hex target.toNat}"
+    if ¬ json then
+      IO.println s!"insns={nI}, def-witness candidates={defs.size}, target=0x{hex target.toNat}"
     -- iterative deepening over the walk budget for the whole def set.
     let mut found := false
     let mut traceLines : Array String := #[]
+    let mut witnesses : Array Json := #[]   -- witness records (for --json)
     for (i, rg, v) in defs do
       let mut resolved := false
       for lvl in ladder do
@@ -684,7 +726,11 @@ where
           | some ua =>
             found := true; resolved := true
             traceLines := traceLines.push s!"def {rg}@0x{hex insns[i]!.addr} → use@0x{hex ua} resolved at L{lvl.idx}"
-            IO.println s!"  ~ def @0x{hex insns[i]!.addr} ({rg}={v}) → use @0x{hex ua}  [L{lvl.idx}]"
+            witnesses := witnesses.push
+              (Json.mkObj [("def", jn insns[i]!.addr), ("reg", Json.str rg),
+                ("val", jn v.toNat), ("use", jn ua), ("level", jn lvl.idx)])
+            if ¬ json then
+              IO.println s!"  ~ def @0x{hex insns[i]!.addr} ({rg}={v}) → use @0x{hex ua}  [L{lvl.idx}]"
           | none =>
             if ¬ budget then resolved := true   -- provably none at this depth
             else if lvl.idx == ladder.size - 1 then
@@ -696,10 +742,16 @@ where
         (match defs[w.val]? with
          | some (i, rr, v) => ((walk 4000 i rr v).1).isNone
          | none => true) = true)) cfg
-    if found ∨ r.isFailure then
-      IO.println s!"FOUND a witness DAG to target (plausible counterexample: {r.isFailure})"
+    let foundAny := found || r.isFailure
+    if json then
+      IO.println (Json.mkObj [("insns", jn nI), ("candidates", jn defs.size),
+        ("target", jn target.toNat), ("found", Json.bool foundAny),
+        ("witnesses", Json.arr witnesses)]).compress
     else
-      IO.println "no witness DAG reaches the target in this region"
-    if showTrace then
-      IO.eprintln "=== iterative-deepening search trace ==="
-      for l in traceLines do IO.eprintln s!"  {l}"
+      if foundAny then
+        IO.println s!"FOUND a witness DAG to target (plausible counterexample: {r.isFailure})"
+      else
+        IO.println "no witness DAG reaches the target in this region"
+      if showTrace then
+        IO.eprintln "=== iterative-deepening search trace ==="
+        for l in traceLines do IO.eprintln s!"  {l}"

@@ -180,5 +180,26 @@ if "$BIN" decompile "$SELF" no_such_symbol_xyz 2>/dev/null; then fail "expected 
 pass "rejected: unknown symbol"
 rm -f /tmp/flowref-list.$$
 
+echo "== 15. --json machine-readable output (valid JSON, C round-trips) =="
+if command -v python3 >/dev/null 2>&1; then
+  "$BIN" list "$SELF" --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["arch"], "arch"; assert d["functionCount"]>0, "funcs"; assert d["functions"][0]["name"]' \
+    || fail "list --json invalid or missing fields"
+  pass "list --json is valid JSON with arch + functions"
+  "$BIN" decompile "$SELF" _start --json 2>/dev/null | python3 -c '
+import json,sys,subprocess
+d=json.load(sys.stdin)
+assert d["signature"].startswith("uint32_t sub_"), "signature"
+open("/tmp/fr-json.c","w").write(d["c"])
+subprocess.run(["gcc","-xc","-std=c11","-w","-fsyntax-only","/tmp/fr-json.c"],check=True)' \
+    || fail "decompile --json invalid, or embedded C does not compile"
+  pass "decompile --json valid; embedded C compiles (gcc -fsyntax-only)"
+  rm -f /tmp/fr-json.c
+  "$BIN" xref "$SELF" _start 0x1 --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); assert "insns" in d and "witnesses" in d and "found" in d' \
+    || fail "xref --json invalid or missing fields"
+  pass "xref --json is valid JSON with insns/witnesses/found"
+else
+  echo "skip: python3 not available for JSON validation"
+fi
+
 echo
 echo "ALL TESTS PASSED"
