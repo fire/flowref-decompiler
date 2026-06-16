@@ -787,6 +787,7 @@ inductive SInsn
   | bin   (dst : String) (op : Op) (a b : Operand)
   | load  (dst : String) (base : String) (disp : Word)
   | store (base : String) (disp : Word) (src : String)   -- *(base + disp) := src
+  | csel  (dst : String) (cond a b : Operand)            -- dst := cond ? a : b  (cmov)
   | ret   (src : String)
   deriving Repr
 
@@ -816,6 +817,8 @@ structure SSt where
   | .store base 0 src => { s with stmts := s.stmts ++ [.store (s.get base) (s.get src)] }
   | .store base disp src => { regs := s.regs, retA := s.retA, n := s.n + 1,
                               stmts := s.stmts ++ [.bind (.alu .add (s.get base) (.imm disp)), .store (.slot s.n) (s.get src)] }
+  | .csel d cond a b => { regs := (d, .slot s.n) :: s.regs,
+                          stmts := s.stmts ++ [.bind (.sel (s.opnd cond) (s.opnd a) (s.opnd b))], n := s.n + 1, retA := s.retA }
   | .ret r         => { s with retA := s.get r }
 
 /-- Lift a sequence with stores to a statement IL program. -/
@@ -834,6 +837,25 @@ theorem liftS_storeLoad_correct (mem : Mem) (p v : Word) :
         = { stmts := [.store (arg 0) (arg 1), .bind (.load (arg 0))], ret := slot 0 } from rfl]
   simp only [SProg.eval, sevalGo, Rhs.eval, Atom.eval, Mem.upd,
              List.getD_cons_zero, List.getD_cons_succ, List.nil_append]
+  bv_decide
+
+/-- `uint32_t umax(uint32_t a, uint32_t b){ return (a < b) ? b : a; }` compiled as
+compare + `cmov`: `cmp; (a<b)→ecx; cmov ecx ? esi : edi`. -/
+def umaxInsns : List SInsn :=
+  [ .bin "ecx" ult (.reg "edi") (.reg "esi")            -- ecx = (a < b) ? 1 : 0
+  , .csel "eax" (.reg "ecx") (.reg "esi") (.reg "edi")  -- eax = ecx ? b : a
+  , .ret "eax" ]
+
+/-- The lifted compare+cmov recovers `max`: the result is an upper bound of both
+operands, for **all** inputs, by `bv_decide`. -/
+theorem liftS_umax_is_ub (mem : Mem) (a b : Word) :
+    ¬ ((liftS ["edi", "esi"] umaxInsns).eval mem [a, b]).ult a ∧
+    ¬ ((liftS ["edi", "esi"] umaxInsns).eval mem [a, b]).ult b := by
+  rw [show liftS ["edi", "esi"] umaxInsns
+        = { stmts := [.bind (.alu ult (arg 0) (arg 1)), .bind (.sel (slot 0) (arg 1) (arg 0))],
+            ret := slot 1 } from rfl]
+  simp only [SProg.eval, sevalGo, Rhs.eval, Atom.eval, Op.apply,
+             List.getD_cons_zero, List.getD_cons_succ, List.nil_append, List.cons_append]
   bv_decide
 
 end FlowrefDecompiler.IL
