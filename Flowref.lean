@@ -181,13 +181,21 @@ def emitC (a : A) (insns : Array Ins) (fnVa : Nat) : IO (String × Array TraceEn
   for (i, r) in defSites do
     let nm := (ssaName.get? i).getD r
     declSet := declAdd declSet nm (regCType r)
-  -- φ locals + any read register without a recorded version (arguments)
+    -- Also declare the bare register: a written reg can simultaneously appear as
+    -- a memory base/index in its own source operand (`mov rax, [rcx+rax*8]`),
+    -- where `memToC` emits it un-versioned.
+    declSet := declAdd declSet r (regCType r)
+  -- φ locals + any read register. We always declare the *bare* register: memory
+  -- operands (`memToC`) are emitted without SSA substitution, so a memory base
+  -- like `rcx` appears verbatim and must be a declared local. When the read also
+  -- has a recorded SSA version, declare that too (the substituted scalar path).
   for j in [0:nI] do
     for r in readsRegs a insns[j]! do
       if ¬ r.startsWith "0x" then
+        declSet := declAdd declSet r (regCType r)
         match (useToVer.get? j).getD [] |>.lookup r with
         | some nm => declSet := declAdd declSet nm (regCType r)
-        | none => declSet := declAdd declSet r (regCType r)
+        | none => pure ()
   -- the implicit return register
   let retReg := match a with | .x86 => "eax" | .ppc => "r3"
   declSet := declSet.insert (cName retReg) (regCType retReg)

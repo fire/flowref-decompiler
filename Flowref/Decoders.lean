@@ -160,13 +160,17 @@ private def attMemToIntel (op0 : String) : String :=
     let scale := parts.getD 2 ""
     let d := disp.trimAscii.toString
     let e0 := base
+    -- Emit Capstone-Intel-style *spaced* operators (`[rip - 0x34]`, `[rbp + rax*4]`)
+    -- so the kernel's `readsRegs` (which splits on spaces/`+`/`*`) extracts every
+    -- base/index register and declares it. Unspaced `rip-0x34` would hide `rip`.
     let e1 := if index ≠ "" then
-        (if e0 == "" then index else e0 ++ "+" ++ index) ++
+        (if e0 == "" then index else e0 ++ " + " ++ index) ++
         (if scale ≠ "" ∧ scale ≠ "1" then "*" ++ scale else "")
       else e0
     let e2 := if d == "" then e1
-      else if d.startsWith "-" then (if e1 == "" then d else e1 ++ d)
-      else (if e1 == "" then d else e1 ++ "+" ++ d)
+      else if d.startsWith "-" then
+        (if e1 == "" then d else e1 ++ " - " ++ (d.drop 1).toString)
+      else (if e1 == "" then d else e1 ++ " + " ++ d)
     "[" ++ e2 ++ "]"
   | [] => op
 
@@ -221,7 +225,9 @@ def parseAsmLine (ln0 : String) : Option Ins := do
       let fields := (afterColon.splitOn "\t").map (·.trimAscii.toString) |>.filter (¬ ·.isEmpty)
       (fields.getLastD (afterColon.trimAscii.toString))
     else rest1
-  let body := body.trimAscii.toString
+  -- Strip a trailing AT&T comment (`# imm = 0x…`, `# 0x…`) — objdump/Capstone
+  -- annotate immediates this way; the `#` is not part of the operand.
+  let body := ((body.splitOn "#").headD body).trimAscii.toString
   if body.isEmpty then failure
   let chars := body.toList
   let mnRaw := String.ofList (chars.takeWhile (fun c => ¬ isSpace c))
