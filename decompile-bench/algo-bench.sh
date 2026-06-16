@@ -27,8 +27,10 @@ total=0; proven=0; unsafe_ok=0; violations=0
 printf "%-15s %-14s %s\n" "function" "STRICT" "UNSAFE-compiles"
 printf "%-15s %-14s %s\n" "--------" "------" "---------------"
 for f in $FUNCS; do
-  read SVAL SSIZE < <(readelf -sW "$obj" | awk -v s="$f" '$8==s{print "0x"$2,"0x"$3}')
+  # readelf -s prints Value in hex but Size in DECIMAL; convert the size to hex.
+  read SVAL SZDEC < <(readelf -sW "$obj" | awk -v s="$f" '$8==s{print "0x"$2, $3}')
   [ -n "${SVAL:-}" ] || { printf "%-15s %s\n" "$f" "(symbol not found)"; continue; }
+  SSIZE=$(printf "0x%x" "$SZDEC")
   total=$((total+1))
   FOFF=$(printf "0x%x" $((SVAL - TVMA + TOFF)))
 

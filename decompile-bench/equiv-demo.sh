@@ -48,7 +48,9 @@ run_one() {
   local sym="$1"
   total=$((total+1))
   # symbol value (section-relative) + size, from the symbol table — metadata.
-  read SVAL SSIZE < <(readelf -sW /tmp/fr_refs.o | awk -v s="$sym" '$8==s{print "0x"$2, "0x"$3}')
+  # readelf -s Value is hex, Size is DECIMAL — convert the size to hex.
+  read SVAL SZDEC < <(readelf -sW /tmp/fr_refs.o | awk -v s="$sym" '$8==s{print "0x"$2, $3}')
+  SSIZE=$(printf "0x%x" "${SZDEC:-0}")
   if [ -z "${SVAL:-}" ] || [ -z "${TVMA:-}" ]; then echo "  $sym: INCOMPARABLE (symbol/section not found)"; return; fi
   local FOFF; FOFF=$(printf "0x%x" $(( SVAL - TVMA + TOFF )))
   # the binary's own bytes are the reference — no source compilation needed.
