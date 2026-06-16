@@ -719,4 +719,59 @@ a two-argument function lifted from its instructions and proved by `bv_decide`. 
 theorem lift_add_correct (a b : Word) : (lift ["edi", "esi"] addInsns).eval [a, b] = a + b := by
   rw [show lift ["edi", "esi"] addInsns = p_add from rfl]; exact p_add_correct a b
 
+/-! ### Lifting memory operands → the memory IL (`MProg`).
+
+The register lifter targets `Prog`; loads need `MProg`. This memory lifter
+turns `load dst, disp(base)` into IL: when `disp ≠ 0` it first emits the address
+computation `base + disp` (a fresh slot), then the load — so a memory operand
+becomes provable IL. Run on `deref(p){ return *p; }` it yields the read `*p`. -/
+
+/-- A decoded instruction with memory loads (separate from `LInsn` so the
+register lifter stays total). -/
+inductive MInsn
+  | mov  (dst : String) (src : Operand)
+  | bin  (dst : String) (op : Op) (a b : Operand)
+  | load (dst : String) (base : String) (disp : Word)   -- dst := *(base + disp)
+  | ret  (src : String)
+  deriving Repr
+
+/-- Memory-lifter state: register → IL source, emitted `Rhs` bindings, next slot. -/
+structure MSt where
+  regs  : List (String × Atom) := []
+  binds : List Rhs             := []
+  n     : Nat                  := 0
+  retA  : Atom                 := .imm 0
+
+@[simp] def MSt.get (s : MSt) (r : String) : Atom :=
+  ((s.regs.find? (·.1 = r)).map (·.2)).getD (.imm 0)
+
+@[simp] def MSt.opnd (s : MSt) : Operand → Atom
+  | .reg r => s.get r
+  | .imm w => .imm w
+
+@[simp] def MSt.step (s : MSt) : MInsn → MSt
+  | .mov d src    => { s with regs := (d, s.opnd src) :: s.regs }
+  | .bin d op a b => { regs := (d, .slot s.n) :: s.regs,
+                       binds := s.binds ++ [.alu op (s.opnd a) (s.opnd b)], n := s.n + 1, retA := s.retA }
+  | .load d base 0 => { regs := (d, .slot s.n) :: s.regs,
+                        binds := s.binds ++ [.load (s.get base)], n := s.n + 1, retA := s.retA }
+  | .load d base disp => { regs := (d, .slot (s.n + 1)) :: s.regs,
+                           binds := s.binds ++ [.alu .add (s.get base) (.imm disp), .load (.slot s.n)],
+                           n := s.n + 2, retA := s.retA }
+  | .ret r        => { s with retA := s.get r }
+
+/-- Lift a sequence with memory loads to a memory IL program. -/
+@[simp] def liftM (argRegs : List String) (is : List MInsn) : MProg :=
+  let s := is.foldl MSt.step { regs := argRegs.mapIdx (fun i r => (r, Atom.arg i)) }
+  { binds := s.binds, ret := s.retA }
+
+/-- `uint32_t deref(uint32_t* p){ return *p; }`: `mov (%rdi), %eax; ret`. -/
+def derefInsns : List MInsn := [ .load "eax" "rdi" 0, .ret "eax" ]
+
+/-- The memory lifter recovers the load `*p` (= `mem p`) for **all** memories. -/
+theorem liftM_deref_correct (mem : Mem) (p : Word) :
+    (liftM ["rdi"] derefInsns).eval mem [p] = mem p := by
+  rw [show liftM ["rdi"] derefInsns = { binds := [Rhs.load (arg 0)], ret := slot 0 } from rfl]
+  simp [MProg.eval, mevalGo, Rhs.eval, Atom.eval]
+
 end FlowrefDecompiler.IL
