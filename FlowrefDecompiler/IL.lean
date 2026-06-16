@@ -14,7 +14,7 @@ namespace FlowrefDecompiler.IL
 abbrev Word := BitVec 32
 
 /-- The operations flowref already lifts for leaf functions. -/
-inductive Op | add | sub | mul | band | bor | bxor | shl
+inductive Op | add | sub | mul | band | bor | bxor | shl | ult
   deriving DecidableEq, Repr
 
 /-- An operand: a function argument, an earlier SSA slot, or an immediate.
@@ -44,6 +44,7 @@ structure Prog where
   | .bor,  x, y => x ||| y
   | .bxor, x, y => x ^^^ y
   | .shl,  x, y => x <<< y
+  | .ult,  x, y => if x.ult y then 1 else 0   -- unsigned compare → C-style 0/1
 
 @[simp] def Atom.eval (args slots : List Word) : Atom → Word
   | .arg i  => args.getD i 0
@@ -125,7 +126,7 @@ open LeanSlang
 `LeanSlang.binOpU32` interprets) — so render, printer, and semantics agree. -/
 @[simp] def Op.slangOp : Op → String
   | .add => "+" | .sub => "-" | .mul => "*"
-  | .band => "&" | .bor => "|" | .bxor => "^" | .shl => "<<"
+  | .band => "&" | .bor => "|" | .bxor => "^" | .shl => "<<" | .ult => "<"
 
 /-- The Slang parameter name for argument `i`. -/
 @[simp] def argName (i : Nat) : String := "a" ++ toString i
@@ -188,6 +189,7 @@ abbrev Mem := Word → Word
 inductive Rhs
   | alu  (op : Op) (a b : Atom)
   | load (addr : Atom)
+  | sel  (c x y : Atom)   -- branchless conditional move: `c ≠ 0 ? x : y`
   deriving Repr
 
 /-- A leaf function with read-only memory. -/
@@ -199,6 +201,7 @@ structure MProg where
 @[simp] def Rhs.eval (mem : Mem) (args slots : List Word) : Rhs → Word
   | .alu op a b => op.apply (a.eval args slots) (b.eval args slots)
   | .load addr  => mem (addr.eval args slots)
+  | .sel c x y  => if c.eval args slots ≠ 0 then x.eval args slots else y.eval args slots
 
 /-- Thread the SSA slots left-to-right under a fixed memory, then read `ret`. -/
 @[simp] def mevalGo (mem : Mem) (args : List Word) (ret : Atom) : List Rhs → List Word → Word
@@ -243,6 +246,7 @@ memories; nothing is compiled or run. -/
 @[simp] def Rhs.toSlang (slots : List SlangExpr) : Rhs → SlangExpr
   | .alu op a b => .bin op.slangOp (a.toSlang slots) (b.toSlang slots)
   | .load addr  => .index (.var "mem") (addr.toSlang slots)
+  | .sel c x y  => .ternary (c.toSlang slots) (x.toSlang slots) (y.toSlang slots)
 
 /-- Inline the SSA slots left-to-right, then render the returned atom. -/
 @[simp] def mrenderGo (ret : Atom) : List Rhs → List SlangExpr → SlangExpr
@@ -331,6 +335,7 @@ semantics. Slots become named locals `sᵢ`; stores become buffer assigns. -/
 @[simp] def Rhs.toSlangS : Rhs → SlangExpr
   | .alu op a b => .bin op.slangOp a.toSlangS b.toSlangS
   | .load addr  => .index (.var "mem") addr.toSlangS
+  | .sel c x y  => .ternary c.toSlangS x.toSlangS y.toSlangS
 
 /-- Emit statements, naming each bound slot `sₖ`; stores don't advance `k`. -/
 @[simp] def srenderGo (k : Nat) : List Stmt → List SlangStmt
@@ -355,5 +360,31 @@ theorem store_two_render (mem : Mem) (p a b : Word) :
              Mem.upd, List.getD_cons_zero, List.getD_cons_succ, List.nil_append, List.cons_append,
              reduceIte, Option.some.injEq,]
   bv_decide
+
+/-! ## Control flow: branchless select (cmov), proved with bv_decide.
+
+The proof-friendly entry into control flow is a conditional *move*: `c ≠ 0 ? x : y`
+— branchless, so it bitblasts. Combined with the `ult` comparison it expresses
+`max`/`min`, the canonical leaf-function conditionals (compilers emit `cmov`,
+not a branch). It renders to a Slang `ternary`, proved against `evalU32M`. -/
+
+/-- `uint32_t umax(uint32_t a, uint32_t b){ return (a < b) ? b : a; }`. -/
+def umax : MProg :=
+  { binds := [ alu ult (arg 0) (arg 1)       -- slot0 = (a < b) ? 1 : 0
+             , sel (slot 0) (arg 1) (arg 0) ] -- slot1 = slot0 ? b : a
+  , ret := slot 1 }
+
+/-- The result is an upper bound of both operands — the defining property of
+`max`, for **all** inputs, by `bv_decide`. (Memory is irrelevant here.) -/
+theorem umax_is_ub (mem : Mem) (a b : Word) :
+    ¬ (umax.eval mem [a, b]).ult a ∧ ¬ (umax.eval mem [a, b]).ult b := by
+  simp only [umax, MProg.eval, mevalGo, Rhs.eval, Atom.eval, Op.apply,
+             List.getD_cons_zero, List.getD_cons_succ, List.nil_append, List.cons_append]
+  bv_decide
+
+/-- render-correctness: the emitted Slang `ternary` means exactly `umax.eval`. -/
+theorem umax_render (mem : Mem) (a b : Word) :
+    (umax.render).evalU32M (env2 a b) (memEnv mem) = some (umax.eval mem [a, b]) := by
+  simp +decide [umax, env2, MProg.eval, mevalGo]
 
 end FlowrefDecompiler.IL
