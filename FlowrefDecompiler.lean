@@ -182,9 +182,22 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
               stack := s :: stack
       pure (seen.contains dst ∧ dst != src)
 
+  -- First operand token (the destination of a 2-operand x86 instruction).
+  let firstTok := fun (i : Ins) => ((i.ops.splitOn ",").headD "").trimAscii.toString
+  -- `writesReg` extended to recognise a conditional move (`cmovcc dst, src`) as a
+  -- definition of `dst`. The dep's `writesReg` omits cmov (so the production SSA
+  -- used to drop it, silently mis-lifting cmov leaves — see the soundness gate);
+  -- we model it here as a real def whose value is a `cmp`-conditioned ternary.
+  let writesRegX := fun (arch : A) (i : Ins) =>
+    match writesReg arch i with
+    | some r => some r
+    | none   => match arch with
+                | .x86 => if i.mn.startsWith "cmov" ∧ ¬ (firstTok i).any (· == '[')
+                          then some (firstTok i) else none
+                | _    => none
   -- ===== Pass 2: reaching definitions / SSA — PLAUSIBLE-DRIVEN + iterative deepening =====
   let defSites := (Array.range nI).filterMap (fun i =>
-    (writesReg a insns[i]!).map (fun r => (i, r)))
+    (writesRegX a insns[i]!).map (fun r => (i, r)))
   let mut ssaName : Std.HashMap Nat String := {}   -- def-index → "reg#k"
   do
     let mut verCount : Std.HashMap String Nat := {}
@@ -278,9 +291,19 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- with zero or several (a φ across paths) we conservatively fall back to the
   -- base local. This is what makes simple functions provably equivalent.
   let retName := fun (q : Nat) =>
-    match (reachingDefsB 4000 insns addr2idx a q retReg).1 with
-    | [di] => cName ((ssaName.get? di).getD retReg)
-    | _    => cName retReg
+    -- For a single-block leaf the return value is the last definition of the
+    -- return register in program order. We use `defSites` (which, via
+    -- `writesRegX`, includes cmov defs the dep's reaching-def omits — otherwise a
+    -- cmov result would be dropped and the bare register returned). Multi-block
+    -- (`--unsafe`) keeps the dep's dominator-aware reaching def.
+    if nB == 1 then
+      match (defSites.filter (fun p => p.2 == retReg ∧ p.1 < q)).back? with
+      | some (di, _) => cName ((ssaName.get? di).getD retReg)
+      | none         => cName retReg
+    else
+      match (reachingDefsB 4000 insns addr2idx a q retReg).1 with
+      | [di] => cName ((ssaName.get? di).getD retReg)
+      | _    => cName retReg
 
   -- ===== loop recovery from the plausible back-edge witnesses =====
   -- `backEdges`/`loopHeaders` (above) are the counterexamples to the `loopProp`
@@ -411,6 +434,37 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     applyCdecl pred
 
   -- One non-terminator instruction → its C statement (or `none` to omit).
+  -- Substitute an operand token: pass literals through; map a register to its
+  -- reaching-def SSA name (or its declared local).
+  let subOf := fun (subs : List (String × String)) (tok : String) =>
+    let t := tok.trimAscii.toString
+    if t.startsWith "0x" ∨ t.startsWith "-" ∨ (¬ t.isEmpty ∧ t.front.isDigit) then t
+    else (subs.lookup t).getD (cName t)
+  -- C comparison operator for a conditional-move suffix, after `cmp X, Y`
+  -- (flags = X − Y). `none` for an unmodelled condition.
+  let cmovCondOp : String → Option String := fun mn =>
+    if mn == "cmovb" ∨ mn == "cmovnae" ∨ mn == "cmovc" then some "<"
+    else if mn == "cmovae" ∨ mn == "cmovnb" ∨ mn == "cmovnc" then some ">="
+    else if mn == "cmovbe" ∨ mn == "cmovna" then some "<="
+    else if mn == "cmova" ∨ mn == "cmovnbe" then some ">"
+    else if mn == "cmove" ∨ mn == "cmovz" then some "=="
+    else if mn == "cmovne" ∨ mn == "cmovnz" then some "!="
+    else none
+  -- `cmovcc dst, src` ⇒ `(X op Y) ? src : dst_prev`, with the condition from the
+  -- nearest preceding `cmp X, Y`. `dst_prev`/`src`/`X`/`Y` are SSA-substituted.
+  let cmovRhs : Nat → Ins → List (String × String) → Option String := fun q ins subs =>
+    match cmovCondOp ins.mn, (ins.ops.splitOn ",").map (·.trimAscii.toString) with
+    | some op, [dst, src] =>
+      match (List.range q).reverse.find? (fun k => insns[k]!.mn == "cmp") with
+      | some ck =>
+        match (insns[ck]!.ops.splitOn ",").map (·.trimAscii.toString) with
+        | [x, y] =>
+          let csubs := (useToVer.get? ck).getD []
+          some s!"({subOf csubs x} {op} {subOf csubs y}) ? ({subOf subs src}) : ({subOf subs dst})"
+        | _ => none
+      | none => none
+    | _, _ => none
+
   let stmtOf : Nat → Option String := fun (q : Nat) =>
     let ins := insns[q]!
     if ins.mn == "cmp" ∨ ins.mn == "test" ∨ ins.mn == "nop" then none
@@ -420,12 +474,13 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
         let args := if t == fnVa ∧ pm.count > 0 then String.intercalate ", " pm.names else ""
         some s!"{cName retReg} = sub_{hex t}({args});"
       | none => some "((uint32_t(*)(void))(uintptr_t)0)();  /* indirect call */"
-    else match writesReg a ins with
+    else match writesRegX a ins with
       | some r =>
         let nm := cName ((ssaName.get? q).getD r)
         if okLocal nm then
           let subs := (useToVer.get? q).getD []
-          let rhs := applyCdecl (renderExprC a ins subs)
+          let rhs := if ins.mn.startsWith "cmov" then (cmovRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
+                     else applyCdecl (renderExprC a ins subs)
           -- declare-at-definition; the declared type does the truncation a cast did.
           if inlineDef.contains nm then some s!"{regCType r} {nm} = {rhs};"
           else some s!"{nm} = ({regCType r})({rhs});"
@@ -546,13 +601,19 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- register-only, so it passes the structural checks above — but the emitter does
   -- not model it and would silently emit WRONG C under a "faithful" banner. So
   -- require every x86 instruction to be in the modeled set; refuse otherwise
-  -- (cmov*, setcc*, cmp, test, div, …). Found by decompile-bench/algo-bench.sh
-  -- (umax/umin were mis-lifted before this gate).
+  -- (setcc*, div, unknown …). `cmp` + a supported conditional move are modeled as
+  -- a `(X op Y) ? src : dst` ternary (see `cmovRhs`); `test` is flag-only and
+  -- dead unless consumed, so it is allowed too. Found by decompile-bench/algo-bench.sh.
   let modeledX86 : String → Bool := fun mn =>
     ["mov", "movsxd", "movzx", "movsx", "lea", "add", "sub", "and", "or", "xor",
      "shl", "sal", "shr", "sar", "imul", "neg", "not", "inc", "dec",
-     "ret", "nop", "endbr64"].contains mn
-  let allModeled := a != .x86 ∨ insns.all (fun i => modeledX86 i.mn)
+     "ret", "nop", "endbr64", "cmp", "test"].contains mn ∨ (cmovCondOp mn).isSome
+  -- A conditional move is faithful ONLY if it has a preceding `cmp` to source its
+  -- condition; otherwise refuse (cmovRhs would have no condition).
+  let cmovsHaveCmp := (Array.range nI).all (fun q =>
+    ¬ insns[q]!.mn.startsWith "cmov" ∨
+      ((List.range q).any (fun k => insns[k]!.mn == "cmp")))
+  let allModeled := a != .x86 ∨ (insns.all (fun i => modeledX86 i.mn) ∧ cmovsHaveCmp)
   let faithful := nB == 1 ∧ ¬ hasCall ∧ ¬ hasMemOp ∧ allModeled
   let mut out : String := cPreamble
   out := out ++ s!"\n/* flowref decompile @ 0x{hex fnVa} — {nI} insns, {nB} blocks, {defSites.size} SSA defs\n"
