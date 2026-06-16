@@ -232,4 +232,33 @@ theorem load_add_comm (mem : Mem) (p : Word) :
              List.getD_cons_zero, List.getD_cons_succ, List.nil_append, List.cons_append]
   bv_decide
 
+/-! ### Rendering memory to Slang, proved meaning-preserving.
+
+A load renders to a Slang buffer read `mem[addr]` (`SlangExpr.index`), and we
+prove the render preserves meaning against `LeanSlang.evalU32M` — the
+memory-aware semantics. The buffer stays abstract, so the theorem holds for all
+memories; nothing is compiled or run. -/
+
+/-- Lower an Rhs: ALU → `bin`, load → the buffer read `mem[addr]`. -/
+@[simp] def Rhs.toSlang (slots : List SlangExpr) : Rhs → SlangExpr
+  | .alu op a b => .bin op.slangOp (a.toSlang slots) (b.toSlang slots)
+  | .load addr  => .index (.var "mem") (addr.toSlang slots)
+
+/-- Inline the SSA slots left-to-right, then render the returned atom. -/
+@[simp] def mrenderGo (ret : Atom) : List Rhs → List SlangExpr → SlangExpr
+  | [],      slots => ret.toSlang slots
+  | r :: rs, slots => mrenderGo ret rs (slots ++ [r.toSlang slots])
+
+/-- Memory-IL program → one `LeanSlang.SlangExpr` (reads become `mem[…]`). -/
+@[simp] def MProg.render (p : MProg) : SlangExpr := mrenderGo p.ret p.binds []
+
+/-- IL memory → the Slang buffer environment for the buffer named `mem`. -/
+def memEnv (mem : Mem) : MEnv := fun buf a => if buf = "mem" then mem a else 0
+
+/-- render-correctness with memory: the emitted Slang (with `mem[…]` reads)
+means exactly what the memory-IL means, for **all** memories. -/
+theorem load_add_render (mem : Mem) (p : Word) :
+    (load_add.render).evalU32M (env2 p 0) (memEnv mem) = some (load_add.eval mem [p]) := by
+  simp +decide [load_add, env2, memEnv, MProg.eval, mevalGo]
+
 end FlowrefDecompiler.IL
