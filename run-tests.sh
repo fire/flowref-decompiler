@@ -59,8 +59,9 @@ pass "recovered 2-param SysV + 1-param cdecl signatures"
 # the emitted C (both functions) must compile.
 "$BIN" --demo-params --emit-c | "$GCC" -xc -std=c11 -w -fsyntax-only - \
   || fail "parameter-model demo C does not compile (-fsyntax-only)"
-# and the body must actually bind the incoming arg to the parameter name.
-"$BIN" --demo-params --emit-c | grep -q "eax_0 = (uint32_t)(a0)" \
+# and the body must actually bind the incoming arg to the parameter name
+# (declared at its definition, e.g. `uint32_t eax_0 = a0;`).
+"$BIN" --demo-params --emit-c | grep -qE "eax_0 = \(?a0\)?;" \
   || fail "parameter binding (a0) not threaded into the SSA body"
 pass "parameter-model C compiles and binds args to a0/a1"
 
@@ -112,7 +113,8 @@ A64="$(mktemp /tmp/flowref-a64.XXXXXX)"; printf '\xe0\x00\x80\x52\xc0\x03\x5f\xd
 rm -f "$A64"
 # x64 must decode a REX.W mov that x86 (32-bit) would misread.
 REX="$(mktemp /tmp/flowref-rex.XXXXXX)"; printf '\x48\xc7\xc0\x07\x00\x00\x00\xc3' > "$REX"
-"$BIN" decompile "$REX" x64 0x0 0x0 0x0 0x8 2>/dev/null | grep -q "rax_0 = (uint64_t)(7)" || { rm -f "$REX"; fail "x64 REX.W decode"; }
+# declared at definition now: `uint64_t rax_0 = 7;` (64-bit width proves REX.W).
+"$BIN" decompile "$REX" x64 0x0 0x0 0x0 0x8 2>/dev/null | grep -qE "uint64_t rax_0 = \(?7\)?;" || { rm -f "$REX"; fail "x64 REX.W decode"; }
 rm -f "$REX"
 pass "arm64 / riscv64 / x64 decode through the Capstone adapter"
 

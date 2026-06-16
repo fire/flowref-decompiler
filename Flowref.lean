@@ -273,8 +273,84 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     match (reachingDefsB 4000 insns addr2idx a q retReg).1 with
     | [di] => cName ((ssaName.get? di).getD retReg)
     | _    => cName retReg
-  -- a generic condition temp type
-  -- (we declare cond temps inline as needed)
+
+  -- ===== loop recovery from the plausible back-edge witnesses =====
+  -- `backEdges`/`loopHeaders` (above) are the counterexamples to the `loopProp`
+  -- plausible search, certified by `loopRes`. The structured emitter reuses THOSE
+  -- witnesses — it does not run a second CFG analysis — to choose `while`/`do`:
+  --   * `while` header: the back-edge target whose own conditional exits forward.
+  --   * `do-while` header: the back-edge target whose conditional *tail* jumps back.
+  -- Block-id branch targets used to classify the witnesses.
+  let blkLast := fun (b : Nat) => insns[(blocks[b]!).hi - 1]!
+  let condTgtBlk := fun (b : Nat) =>
+    let li := blkLast b
+    if (condBranchTarget a li).isSome then
+      match branchTarget a li with | some t => (addr2idx[t]?).map (fun j => idx2blk[j]!) | none => none
+    else none
+  let uncondTgtBlk := fun (b : Nat) =>
+    let li := blkLast b
+    if isUncondJmp a li ∧ ¬ (li.mn.startsWith "ret" ∨ li.mn == "blr") then
+      match branchTarget a li with | some t => (addr2idx[t]?).map (fun j => idx2blk[j]!) | none => none
+    else none
+  let whileHdr : Std.HashMap Nat (Nat × Nat) := Id.run do   -- header → (exitBlk, tailBlk)
+    let mut m : Std.HashMap Nat (Nat × Nat) := {}
+    for (tailB, hdr) in backEdges do
+      if hdr < tailB then
+        match condTgtBlk hdr with
+        | some exitB => if exitB > tailB then m := m.insert hdr (exitB, tailB)
+        | none => pure ()
+    pure m
+  let doWhileHdr : Std.HashMap Nat Nat := Id.run do          -- header → tailBlk
+    let mut m : Std.HashMap Nat Nat := {}
+    for (tailB, hdr) in backEdges do
+      if hdr < tailB ∧ ¬ (whileHdr.get? hdr).isSome then
+        match condTgtBlk tailB with
+        | some t => if t == hdr then m := m.insert hdr tailB
+        | none => pure ()
+    pure m
+
+  -- ===== declare-at-definition analysis (student-readable output) =====
+  -- An SSA value is single-assignment, so we can declare it *where it is
+  -- computed* (`uint32_t eax_0 = …;`) instead of in a big zeroed block up front.
+  -- With structured control flow the declaration site sits inside an `if`/`while`
+  -- scope, so this is sound ONLY when the def and every use live in the *same*
+  -- basic block and that block is not a loop header (whose statements/condition
+  -- straddle the loop braces). Cross-block / loop-carried values are declared at
+  -- function top, where they are in scope everywhere. Uses come from the
+  -- reaching-def witness map `useToVer`, so this too is witness-driven.
+  let defIdxByName : Std.HashMap String Nat := Id.run do
+    let mut m : Std.HashMap String Nat := {}
+    for (i, r) in defSites do m := m.insert (cName ((ssaName.get? i).getD r)) i
+    pure m
+  let useIdxByName : Std.HashMap String (List Nat) := Id.run do
+    let mut m : Std.HashMap String (List Nat) := {}
+    for j in [0:nI] do
+      for (_, nm) in (useToVer.get? j).getD [] do
+        m := m.insert nm (j :: (m.get? nm).getD [])
+      -- a `ret` consumes the return register's reaching def (wired by `retName`).
+      if (insns[j]!.mn.startsWith "ret" ∨ insns[j]!.mn == "blr") then
+        let rn := retName j
+        m := m.insert rn (j :: (m.get? rn).getD [])
+    pure m
+  let inlineDef : Std.HashSet String := Id.run do
+    let mut s : Std.HashSet String := {}
+    for (nm, di) in defIdxByName.toList do
+      let db := idx2blk[di]!
+      let scopeSafe := ¬ (whileHdr.get? db).isSome ∧ ¬ (doWhileHdr.get? db).isSome
+      let uses := (useIdxByName.get? nm).getD []
+      if okLocal nm ∧ ¬ pm.names.contains nm ∧ scopeSafe then
+        if uses.all (fun u => idx2blk[u]! == db ∧ u > di) then s := s.insert nm
+    pure s
+
+  -- Blocks that are the destination of some goto / conditional branch — only
+  -- these need a `Lk:` label. Straight-line code then carries no labels at all.
+  let labeledBlk : Std.HashSet Nat := Id.run do
+    let mut s : Std.HashSet Nat := {}
+    for q in [0:nI] do
+      match branchTarget a insns[q]! with
+      | some t => match addr2idx[t]? with | some jj => s := s.insert idx2blk[jj]! | none => pure ()
+      | none => pure ()
+    pure s
 
   -- ===== forward declarations for called subroutines =====
   let mut calledSubs : Std.HashSet Nat := {}
@@ -285,136 +361,186 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
       | some t => calledSubs := calledSubs.insert t
       | none => pure ()
 
-  -- ===== EMIT =====
+  -- ===== EMIT — structured control flow (NASA/JPL Power-of-Ten Rule 1) =====
+  -- We render the plausible witness DAG as `if`/`while`/`do-while` (loop maps +
+  -- `condBlocks` above) instead of goto+label wherever the CFG is reducible, and
+  -- fall back to a labelled `goto` only for the irreducible remainder (so the
+  -- unit always compiles). Unused labels are pruned afterwards.
+
+  -- The C predicate for the conditional terminating block `b` (the cmp operands
+  -- combined with the branch mnemonic).
+  let predOf : Nat → String := fun (b : Nat) =>
+    let bb := blocks[b]!
+    let ins := insns[bb.hi - 1]!
+    let cmpIdx := (Array.range (bb.hi - bb.lo)).toList.reverse.findSome? (fun off =>
+      let p := bb.lo + (bb.hi - bb.lo - 1 - off)
+      let cins := insns[p]!
+      if cins.mn == "cmp" ∨ cins.mn == "test" ∨ cins.mn.startsWith "cmp" then some p else none)
+    let pred : String := match cmpIdx with
+      | some p =>
+        let cins := insns[p]!
+        let toks := (cins.ops.splitOn ",").map (·.trimAscii.toString)
+        let subs := (useToVer.get? p).getD []
+        let lower := fun (tk : String) =>
+          if hasMem tk then memToC tk
+          else if tk.startsWith "0x" ∨ tk.startsWith "-" then tk
+          else (subs.lookup tk).map cName |>.getD (cName tk)
+        match toks with
+        | [x, y] =>
+          let lx := lower x; let ly := lower y
+          if cins.mn == "test" then s!"(({lx}) & ({ly}))"
+          else
+            let op := if ins.mn == "je" ∨ ins.mn == "jz" then "=="
+              else if ins.mn == "jne" ∨ ins.mn == "jnz" then "!="
+              else if ins.mn == "jl" ∨ ins.mn == "jb" then "<"
+              else if ins.mn == "jle" ∨ ins.mn == "jbe" then "<="
+              else if ins.mn == "jg" ∨ ins.mn == "ja" then ">"
+              else if ins.mn == "jge" ∨ ins.mn == "jae" then ">="
+              else "!="
+            s!"((int32_t)({lx}) {op} (int32_t)({ly}))"
+        | _ => "1 /* unknown predicate */"
+      | none => "1 /* flag-based predicate unknown */"
+    applyCdecl pred
+
+  -- One non-terminator instruction → its C statement (or `none` to omit).
+  let stmtOf : Nat → Option String := fun (q : Nat) =>
+    let ins := insns[q]!
+    if ins.mn == "cmp" ∨ ins.mn == "test" ∨ ins.mn == "nop" then none
+    else if ins.mn == "call" ∨ (a == .ppc ∧ (ins.mn == "bl" ∨ ins.mn == "bctrl")) then
+      match branchTarget a ins with
+      | some t =>
+        let args := if t == fnVa ∧ pm.count > 0 then String.intercalate ", " pm.names else ""
+        some s!"{cName retReg} = sub_{hex t}({args});"
+      | none => some "((uint32_t(*)(void))(uintptr_t)0)();  /* indirect call */"
+    else match writesReg a ins with
+      | some r =>
+        let nm := cName ((ssaName.get? q).getD r)
+        if okLocal nm then
+          let subs := (useToVer.get? q).getD []
+          let rhs := applyCdecl (renderExprC a ins subs)
+          -- declare-at-definition; the declared type does the truncation a cast did.
+          if inlineDef.contains nm then some s!"{regCType r} {nm} = {rhs};"
+          else some s!"{nm} = ({regCType r})({rhs});"
+        else none
+      | none =>
+        if hasMem ins.ops ∧ (ins.mn == "mov" ∨ ins.mn.startsWith "st") then
+          match (ins.ops.splitOn ",").map (·.trimAscii.toString) with
+          | [dst, src] =>
+            if hasMem dst then
+              let subs := (useToVer.get? q).getD []
+              let lowSrc := if src.startsWith "0x" ∨ src.startsWith "-" then src
+                else (subs.lookup src).map cName |>.getD (cName src)
+              some s!"{memToC dst} = ({lowSrc});"
+            else none
+          | _ => none
+        else none
+
+  let padFor := fun (n : Nat) => String.join (List.replicate n "  ")
+
+  let mut body : String := ""
+  -- region stack: (kind, key, closeText); kind 0 = close `}` at start of block
+  -- `key`; kind 1 = `do { … } while` closing at the END of tail block `key`.
+  let mut stack : List (Nat × Nat × String) := []
+  for b in [0:nB] do
+    -- close any `if`/`while` regions that end at the start of this block.
+    let mut closing := true
+    while closing do
+      match stack with
+      | (0, key, txt) :: rest =>
+        if key == b then stack := rest; body := body ++ padFor (stack.length + 1) ++ txt ++ "\n"
+        else closing := false
+      | _ => closing := false
+    let bb := blocks[b]!
+    let li := insns[bb.hi - 1]!
+    let hasTerm := isUncondJmp a li ∨ (condBranchTarget a li).isSome
+    let stmtHi := if hasTerm then bb.hi - 1 else bb.hi
+    -- open a loop region if this block is a recognised header.
+    let mut termConsumed := false
+    match whileHdr.get? b with
+    | some (exitB, _) =>
+      body := body ++ padFor (stack.length + 1) ++ s!"while (!({predOf b})) " ++ "{\n"
+      stack := (0, exitB, "}") :: stack
+      termConsumed := true            -- the header conditional IS the loop test
+    | none =>
+      match doWhileHdr.get? b with
+      | some tailB =>
+        body := body ++ padFor (stack.length + 1) ++ "do {\n"
+        stack := (1, tailB, "} while (0);") :: stack
+      | none => pure ()
+    let pad := padFor (stack.length + 1)
+    if labeledBlk.contains b then body := body ++ s!"L{b}:;\n"
+    -- straight-line statements
+    for q in [bb.lo:stmtHi] do
+      match stmtOf q with | some s => body := body ++ pad ++ s ++ "\n" | none => pure ()
+    -- terminator
+    if hasTerm ∧ ¬ termConsumed then
+      let isDoTail := match stack with | (1, key, _) :: _ => key == b | _ => false
+      if isDoTail then
+        let cond := predOf b
+        stack := stack.drop 1
+        body := body ++ padFor (stack.length + 1) ++ "} while (" ++ cond ++ ");\n"
+      else if (condBranchTarget a li).isSome then
+        match condTgtBlk b with
+        | some tb =>
+          let nestOk : Bool := match stack with | (0, k, _) :: _ => decide (tb ≤ k) | _ => true
+          if decide (tb > b) && nestOk then
+            -- forward conditional → if-then over [b+1, tb): take the body when the
+            -- branch is NOT taken.
+            body := body ++ pad ++ s!"if (!({predOf b})) " ++ "{\n"
+            stack := (0, tb, "}") :: stack
+          else
+            body := body ++ pad ++ s!"if ({predOf b}) goto L{tb};\n"
+        | none => pure ()      -- conditional tail to external: fall through
+      else if li.mn.startsWith "ret" ∨ li.mn == "blr" then
+        body := body ++ pad ++ s!"return {retName (bb.hi - 1)};\n"
+      else
+        match uncondTgtBlk b with
+        | some tb =>
+          -- a back edge into a `while` header is the loop's implicit re-test: drop it.
+          if (whileHdr.get? tb).isSome ∧ tb ≤ b then pure ()
+          else body := body ++ pad ++ s!"goto L{tb};\n"
+        | none => body := body ++ pad ++ s!"return {cName retReg};  /* indirect jump */\n"
+  -- close any regions still open at function end (guarantees balanced braces).
+  let mut closeAll := true
+  while closeAll do
+    match stack with
+    | (_, _, txt) :: rest => stack := rest; body := body ++ padFor (stack.length + 1) ++ txt ++ "\n"
+    | [] => closeAll := false
+  -- trailing fall-through return only when the last instruction is not a terminator.
+  let lastIsTerm := nI > 0 ∧
+    (let li := insns[nI-1]!; isUncondJmp a li ∨ li.mn.startsWith "ret" ∨ li.mn == "blr")
+  if ¬ lastIsTerm then body := body ++ s!"  return {retName (nI-1)};\n"
+  body := body ++ "}\n"
+
+  -- prune labels that no emitted `goto` targets (structuring removed most jumps).
+  body := String.intercalate "\n" ((body.splitOn "\n").filter (fun line =>
+    let t := line.trimAscii.toString
+    if t.startsWith "L" ∧ t.endsWith ":;" then
+      match ((t.dropEnd 2).drop 1).toNat? with
+      | some n => contains body s!"goto L{n};"
+      | none => true
+    else true))
+
+  -- ===== assemble: preamble + header comment + prototypes + signature =====
   let mut out : String := cPreamble
-  out := out ++ s!"\n/* flowref decompile @ 0x{hex fnVa}\n"
-  out := out ++ s!"   {nI} insns, {nB} basic blocks, {defSites.size} SSA defs\n"
-  out := out ++ s!"   loop headers (plausible back-edge: {loopRes.isFailure}): {loopHeaders}\n"
-  out := out ++ s!"   if/else conditional blocks: {condBlocks}\n"
-  out := out ++ s!"   calling convention: {repr pm.conv}, recovered params: {pm.count} ({pm.names}) */\n\n"
-  -- forward prototypes. We know a callee's parameter count only for the function
-  -- itself (self-recursion); other callees are declared `(void)` (unknown arity)
-  -- — see Flowref/Params.lean on the limits.
+  out := out ++ s!"\n/* flowref decompile @ 0x{hex fnVa} — {nI} insns, {nB} blocks, {defSites.size} SSA defs\n"
+  out := out ++ s!"   loops (plausible back-edge: {loopRes.isFailure}): {loopHeaders}; conditionals: {condBlocks}\n"
+  out := out ++ s!"   calling convention: {repr pm.conv}, recovered params: {pm.count} */\n\n"
   for t in calledSubs.toList do
     if t == fnVa ∧ pm.count > 0 then
       out := out ++ s!"uint32_t sub_{hex t}({paramList});\n"
     else
       out := out ++ s!"uint32_t sub_{hex t}(void);\n"
   out := out ++ "\nuint32_t sub_" ++ hex fnVa ++ s!"({paramList}) " ++ "{\n"
-  -- declarations
+  -- declarations: only the locals that actually appear in the body and were not
+  -- already declared at their definition site.
+  let mut declLines : String := ""
   for (nm, ty) in declSet.toList do
-    out := out ++ s!"  {ty} {nm} = 0;\n"
-  -- condition temps: one per conditional branch instruction.
-  let mut condCount := 0
-  for q in [0:nI] do
-    if (condBranchTarget a insns[q]!).isSome then condCount := condCount + 1
-  for c in [0:condCount] do
-    out := out ++ s!"  int cond_{c} = 0;\n"
-  out := out ++ "\n"
-
-  -- body: labels + goto (always valid C). condition index counter.
-  let mut ci := 0
-  for b in [0:nB] do
-    let bb := blocks[b]!
-    out := out ++ s!"L{b}:;\n"
-    for q in [bb.lo:bb.hi] do
-      let ins := insns[q]!
-      if isUncondJmp a ins then
-        if ins.mn.startsWith "ret" ∨ ins.mn == "blr" then
-          out := out ++ s!"  return {retName q};\n"
-        else
-          match branchTarget a ins with
-          | some t => match addr2idx[t]? with
-              | some jj => out := out ++ s!"  goto L{idx2blk[jj]!};\n"
-              | none => out := out ++ s!"  /* tail-transfer to external 0x{hex t} */\n  return {cName retReg};\n"
-          | none => out := out ++ s!"  /* indirect jump {ins.ops} */\n  return {cName retReg};\n"
-      else if (condBranchTarget a ins).isSome then
-        -- find a preceding cmp/test in this block for the predicate.
-        let cmpIdx := (Array.range (bb.hi - bb.lo)).toList.reverse.findSome? (fun off =>
-          let p := bb.lo + (bb.hi - bb.lo - 1 - off)
-          let cins := insns[p]!
-          if cins.mn == "cmp" ∨ cins.mn == "test" ∨ cins.mn.startsWith "cmp" then some p else none)
-        -- build a C predicate from the cmp operands + the branch mnemonic.
-        let pred : String := match cmpIdx with
-          | some p =>
-            let cins := insns[p]!
-            let toks := (cins.ops.splitOn ",").map (·.trimAscii.toString)
-            let subs := (useToVer.get? p).getD []
-            let lower := fun (tk : String) =>
-              if hasMem tk then memToC tk
-              else if tk.startsWith "0x" ∨ tk.startsWith "-" then tk
-              else (subs.lookup tk).map cName |>.getD (cName tk)
-            match toks with
-            | [x, y] =>
-              let lx := lower x; let ly := lower y
-              if cins.mn == "test" then s!"(({lx}) & ({ly}))"
-              else
-                let op := if ins.mn == "je" ∨ ins.mn == "jz" then "=="
-                  else if ins.mn == "jne" ∨ ins.mn == "jnz" then "!="
-                  else if ins.mn == "jl" ∨ ins.mn == "jb" then "<"
-                  else if ins.mn == "jle" ∨ ins.mn == "jbe" then "<="
-                  else if ins.mn == "jg" ∨ ins.mn == "ja" then ">"
-                  else if ins.mn == "jge" ∨ ins.mn == "jae" then ">="
-                  else "!="  -- fall back: documented below
-                s!"((int32_t)({lx}) {op} (int32_t)({ly}))"
-            | _ => "/* unknown predicate */ 1"
-          | none => "/* no cmp found; flag-based predicate unknown */ 1"
-        out := out ++ s!"  cond_{ci} = {applyCdecl pred};\n"
-        match branchTarget a ins with
-        | some t =>
-          let tl := match addr2idx[t]? with | some jj => s!"L{idx2blk[jj]!}" | none => s!"/*ext 0x{hex t}*/L{b}_skip"
-          if (addr2idx[t]?).isSome then
-            out := out ++ s!"  if (cond_{ci}) goto {tl};\n"
-          else
-            out := out ++ s!"  /* conditional tail to external 0x{hex t} (kept as fall-through) */\n"
-        | none => out := out ++ s!"  /* indirect conditional branch */\n"
-        ci := ci + 1
-      else if ins.mn == "cmp" ∨ ins.mn == "test" ∨ ins.mn == "nop" then
-        out := out ++ s!"  /* {ins.mn} {ins.ops} (folded into predicate) */\n"
-      else if ins.mn == "call" ∨ (a == .ppc ∧ (ins.mn == "bl" ∨ ins.mn == "bctrl")) then
-        match branchTarget a ins with
-        | some t =>
-          if (addr2idx[t]?).isSome ∨ true then
-            -- direct call: prototype forward-declared above (or external). When
-            -- the callee's parameter count is recoverable (self-recursion), pass
-            -- the right number of arguments; otherwise a no-arg call.
-            let args :=
-              if t == fnVa ∧ pm.count > 0 then String.intercalate ", " pm.names else ""
-            out := out ++ s!"  {cName retReg} = sub_{hex t}({args});\n"
-        | none =>
-          -- indirect/computed call: cast through a function pointer; C-legal.
-          out := out ++ s!"  ((uint32_t(*)(void))(uintptr_t)0)(); /* indirect call {ins.ops} */\n"
-      else
-        match writesReg a ins with
-        | some r =>
-          let nm := cName ((ssaName.get? q).getD r)
-          -- Defensive: only emit an assignment when the destination lowers to a
-          -- legal C identifier. A malformed/foreign-syntax decode can yield a
-          -- non-register "destination" (e.g. an immediate); never emit that as
-          -- an lvalue — keep the unit compilable by dropping to a comment.
-          if okLocal nm then
-            let subs := (useToVer.get? q).getD []
-            let rhs := applyCdecl (renderExprC a ins subs)
-            out := out ++ s!"  {nm} = ({regCType r})({rhs});\n"
-          else
-            out := out ++ s!"  /* {ins.mn} {ins.ops} (non-register destination) */\n"
-        | none =>
-          -- store or other side-effecting op: lower a store to a mem write if possible.
-          if hasMem ins.ops ∧ (ins.mn == "mov" ∨ ins.mn.startsWith "st") then
-            -- "mov [mem], src" → *(...)=src
-            let toks := (ins.ops.splitOn ",").map (·.trimAscii.toString)
-            match toks with
-            | [dst, src] =>
-              if hasMem dst then
-                let subs := (useToVer.get? q).getD []
-                let lowSrc := if src.startsWith "0x" ∨ src.startsWith "-" then src
-                  else (subs.lookup src).map cName |>.getD (cName src)
-                out := out ++ s!"  {memToC dst} = ({lowSrc});\n"
-              else out := out ++ s!"  /* {ins.mn} {ins.ops} */\n"
-            | _ => out := out ++ s!"  /* {ins.mn} {ins.ops} */\n"
-          else
-            out := out ++ s!"  /* {ins.mn} {ins.ops} */\n"
-  out := out ++ "  return " ++ cName retReg ++ ";\n}\n"
+    if ¬ inlineDef.contains nm ∧ wholeWordIn body nm then
+      declLines := declLines ++ s!"  {ty} {nm} = 0;\n"
+  out := out ++ declLines
+  if ¬ declLines.isEmpty then out := out ++ "\n"
+  out := out ++ body
   pure (out, trace)
 
 /-- Extract the recovered C signature line (`uint32_t sub_…(…)`) from a TU, or

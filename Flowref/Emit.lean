@@ -4,25 +4,31 @@ import Flowref.Dataflow
 /-! # flowref — compilable C emission
 
 The emitter lowers the recovered CFG + SSA + expressions into a **complete C
-translation unit that `gcc -fsyntax-only -std=c11 -w` accepts**. The strategy:
+translation unit that `gcc -fsyntax-only -std=c11 -w` accepts**, in a style aimed
+at teaching and safety-critical review (NASA/JPL *Power of Ten*: simple control
+flow, smallest-scope data, warning-clean). The strategy:
 
 * Emit `#include <stdint.h>` + typedefs and forward-declare every referenced
-  `sub_*`.
-* A real `uint32_t sub_<addr>(void) { … }` definition.
-* Every SSA value is declared as a typed local up front; names are C-legal
-  (`reg_version`, with `#`/`[`/`]`/`+`/spaces mapped to legal characters).
+  `sub_*`, then a real `uint32_t sub_<addr>(…) { … }` definition.
+* **Declare values where computed** (Power-of-Ten Rule 6, smallest scope):
+  `uint32_t eax_0 = …;` at the definition, when def + uses share one block/scope;
+  cross-block / loop-carried values are declared at function top. Unused
+  declarations are pruned.
 * Memory operands become `*(uint32_t*)(base + disp)`; calls become
-  `sub_<tgt>();` or `((void(*)(void))(uintptr_t)0x…)();`.
-* SSA φ is lowered away: each `(reg, version)` is a distinct declared local and
-  the value flows through plain assignments — there is no φ in the C output.
-* Control flow uses **labels + `goto`** (always valid C). Where a conditional
-  block cleanly dominates a forward merge, a structured `if (cond) { … }` is
-  emitted; otherwise the `goto` form is used. Conditions are real C derived from
-  the compare + branch; when the exact predicate is unknown a documented boolean
-  temp (`cond_N`) is used, still C-legal.
+  `sub_<tgt>();` or an indirect function-pointer call. SSA φ is lowered away:
+  each `(reg, version)` is a distinct local; no φ appears in the output.
+* **Structured control flow** (Power-of-Ten Rule 1): the plausible witness DAG
+  (back-edge witnesses + reaching-def witnesses) is rendered as `if` / `while` /
+  `do-while`; a labelled `goto` is used only for the irreducible remainder, and
+  unused labels are pruned. Conditions are real C from the compare + branch.
 
-The output is not guaranteed semantically faithful or type-correct — only that
-it parses and type-checks as C11.
+The emitted C is required to be **both type-correct and functionally equivalent
+to the source** — functional equivalence is flowref's defining invariant. It is
+machine-checked by the Decompile-Bench equivalence oracle
+(`decompile-bench/equiv.sh`), which compiles, links and *runs* the candidate
+against the reference and compares results. Where a construct is outside the
+faithfully-liftable subset the oracle reports `INCOMPARABLE` rather than assert a
+false equivalence — it never passes off non-equivalent output as correct.
 -/
 
 namespace Flowref
@@ -108,6 +114,25 @@ def renderExprC (a : A) (i : Ins) (subs : List (String × String)) : String :=
     -- those are declared as locals too, so the text stays C-legal as long as it
     -- is alphanumerics/operators. Guard: if it still has a '[' it's a mem expr.
     if hasMem replaced then memToC replaced else replaced
+
+/-- Does `name` occur in `body` as a whole identifier (bordered by non-identifier
+characters, or the string ends)? Used to prune declarations for names that never
+actually appear in the emitted body — so only the locals a reader can see in use
+are declared. Never removes a needed declaration: if the name is used, it is
+present, so it is kept. -/
+def wholeWordIn (body name : String) : Bool := Id.run do
+  if name.isEmpty then return false
+  let parts := body.splitOn name
+  if parts.length ≤ 1 then return false
+  let isIdent := fun (c : Char) =>
+    ('a' ≤ c ∧ c ≤ 'z') ∨ ('A' ≤ c ∧ c ≤ 'Z') ∨ ('0' ≤ c ∧ c ≤ '9') ∨ c == '_'
+  for idx in [0:parts.length - 1] do
+    let lc := (parts[idx]!).toList.getLast?
+    let rc := (parts[idx+1]!).toList.head?
+    let lok := match lc with | some c => !isIdent c | none => true
+    let rok := match rc with | some c => !isIdent c | none => true
+    if lok && rok then return true
+  return false
 
 /-- Forward prototypes + typedefs preamble for the translation unit. -/
 def cPreamble : String :=

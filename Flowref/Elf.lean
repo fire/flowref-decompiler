@@ -1,4 +1,5 @@
 import Flowref.Disasm
+import Std.Data.HashMap
 
 /-! # flowref — ELF parser (self-contained FFI shim)
 
@@ -170,15 +171,16 @@ def ElfInfo.sectionAt (e : ElfInfo) (vaddr : Nat) : Option ElfSection :=
 
 /-- Deduplicated FUNC symbols (symtab + dynsym can overlap), preferring the
 entry that recorded a non-zero size. Sorted by vaddr for stable `list` output.
-Symbol counts are small, so a linear dedup keeps this dependency-free. -/
+Uses a hash map keyed by vaddr — O(n), not O(n²): real binaries can have tens of
+thousands of symbols (a statically-linked Lean binary has ~99k), and a linear
+dedup made `list`/symbol-resolution take tens of seconds. -/
 def ElfInfo.functions (e : ElfInfo) : Array ElfFunc := Id.run do
-  let mut acc : Array ElfFunc := #[]
+  let mut byVa : Std.HashMap Nat ElfFunc := {}
   for fn in e.funcs do
-    match acc.findIdx? (·.vaddr == fn.vaddr) with
-    | some i =>
-      if (acc[i]!).size == 0 ∧ fn.size != 0 then acc := acc.set! i fn
-    | none => acc := acc.push fn
-  pure (acc.qsort (fun a b => a.vaddr < b.vaddr))
+    match byVa[fn.vaddr]? with
+    | some prev => if prev.size == 0 ∧ fn.size != 0 then byVa := byVa.insert fn.vaddr fn
+    | none      => byVa := byVa.insert fn.vaddr fn
+  pure ((byVa.toArray.map (·.2)).qsort (fun a b => a.vaddr < b.vaddr))
 
 /-- A resolved region for the binary adapter. -/
 structure ElfRegion where
