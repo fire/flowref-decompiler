@@ -475,4 +475,45 @@ theorem addLoop_render (x n : Word) :
   have h : addLoop n.toNat x = x + n := by rw [addLoop_correct]; bv_omega
   rw [h]; simp +decide [p_add, env2]
 
+/-! ## Composition: a realistic leaf combining every construct.
+
+Each tier above was proved in isolation; a real lifted function uses them
+together. `clamp_min` loads `*p`, computes `min(v, *p)` via compare + select,
+stores it back, then returns the read-back value — exercising load, `ult`,
+`sel`, store, and read-after-write in one body. Both the spec and the
+statement-level render-correctness are still closed by `bv_decide`, showing the
+fragment composes, not just its pieces. -/
+
+/-- `uint32_t clamp_min(uint32_t* p, uint32_t v){ uint x=*p; uint r=(v<x)?v:x;
+    *p=r; return *p; }`. -/
+def clamp_min : SProg :=
+  { stmts := [ .bind (load (arg 0))                  -- s0 = *p
+             , .bind (alu ult (arg 1) (slot 0))       -- s1 = (v < *p) ? 1 : 0
+             , .bind (sel (slot 1) (arg 1) (slot 0))  -- s2 = (v < *p) ? v : *p  = min
+             , .store (arg 0) (slot 2)                -- *p = s2
+             , .bind (load (arg 0)) ]                 -- s3 = *p  (= s2; same address)
+  , ret := slot 3 }
+
+/-- The result is a lower bound of both `v` and `*p` — the defining property of
+`min`, for **all** memories and inputs, by `bv_decide` (read-after-write and the
+opaque load both handled). -/
+theorem clamp_min_is_lb (mem : Mem) (p v : Word) :
+    (clamp_min.eval mem [p, v]).ule v ∧ (clamp_min.eval mem [p, v]).ule (mem p) := by
+  simp only [clamp_min, SProg.eval, sevalGo, Rhs.eval, Atom.eval, Op.apply, Mem.upd,
+             List.getD_cons_zero, List.getD_cons_succ, List.nil_append, List.cons_append]
+  bv_decide
+
+/-- render-correctness for the composite: the emitted Slang statement body (load,
+ternary, store, read-back) means exactly `clamp_min.eval`, for all memories. -/
+theorem clamp_min_render (mem : Mem) (p v : Word) :
+    evalStmtsU32M
+      (fun n => if n = "a0" then p else if n = "a1" then v else 0)
+      (memEnv mem) (clamp_min.render)
+      = some (clamp_min.eval mem [p, v]) := by
+  simp +decide only [clamp_min, SProg.render, srenderGo, Rhs.toSlangS, Atom.toSlangS,
+             Op.slangOp, slotName, argName, evalStmtsU32M, SlangExpr.evalU32M, binOpU32,
+             UEnv.set, MEnv.store, memEnv, SProg.eval, sevalGo, Rhs.eval, Atom.eval, Op.apply,
+             Mem.upd, List.getD_cons_zero, List.getD_cons_succ, List.nil_append, List.cons_append,
+             reduceIte]
+
 end FlowrefDecompiler.IL
