@@ -286,4 +286,29 @@ theorem liftFn_umax_is_ub (mem : Mem) (a b : Word) {p : SProg}
              List.getD_cons_zero, List.getD_cons_succ, List.nil_append, List.cons_append]
   bv_decide
 
+/-- `umin(a,b){ return a<b ? a : b; }` as `mov eax,edi; cmp edi,esi; cmovae eax,esi;
+ret` — the `cmovae` (≥) form. -/
+def uminIns : List Ins :=
+  [ { addr := 0x6000, mn := "mov",    ops := "eax, edi" },
+    { addr := 0x6002, mn := "cmp",    ops := "edi, esi" },
+    { addr := 0x6004, mn := "cmovae", ops := "eax, esi" },
+    { addr := 0x6007, mn := "ret",    ops := "" } ]
+
+/-- The fused lift is `s0 := (a<b); s1 := s0 ? a : b; return s1`. -/
+theorem liftFn_umin_shape :
+    liftFn ["rdi", "rsi"] uminIns
+      = some { stmts := [.bind (.alu .ult (.arg 0) (.arg 1)),
+                         .bind (.sel (.slot 0) (.arg 0) (.arg 1))], ret := .slot 1 } := by
+  native_decide
+
+/-- Hence the lifted `cmovae` computes the min — a lower bound of both operands,
+for **all** inputs, by `bv_decide`. -/
+theorem liftFn_umin_is_lb (mem : Mem) (a b : Word) {p : SProg}
+    (h : liftFn ["rdi", "rsi"] uminIns = some p) :
+    ¬ a.ult (p.eval mem [a, b]) ∧ ¬ b.ult (p.eval mem [a, b]) := by
+  rw [liftFn_umin_shape] at h; injection h with h; subst h
+  simp only [SProg.eval, sevalGo, Rhs.eval, Atom.eval, Op.apply,
+             List.getD_cons_zero, List.getD_cons_succ, List.nil_append, List.cons_append]
+  bv_decide
+
 end FlowrefDecompiler.Lift
