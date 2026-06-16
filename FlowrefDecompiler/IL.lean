@@ -172,4 +172,64 @@ theorem p_add_render_spec (a b : Word) :
     (p_add.render).evalU32 (env2 a b) = some (a + b) := by
   simp +decide [p_add, env2]
 
+/-! ## Memory: read-only loads — growing the class past register-only leaves.
+
+The corpus measurement (random 500-function Decompile-Bench sample) found ~0%
+of real functions are register-only leaves; the binding constraint is memory.
+This adds a `Word`-addressed load: a straight-line function may now dereference
+pointers (no stores / calls / branches yet) — the nearest reachable real-corpus
+tier. `bv_decide` still discharges equivalence: memory reads appear as
+applications of an opaque `Mem`, abstracted uniformly on both sides. -/
+
+/-- A word-addressed memory: address → 32-bit value. -/
+abbrev Mem := Word → Word
+
+/-- A binding right-hand side: an ALU op, or a load `*(uint32_t*)addr`. -/
+inductive Rhs
+  | alu  (op : Op) (a b : Atom)
+  | load (addr : Atom)
+  deriving Repr
+
+/-- A leaf function with read-only memory. -/
+structure MProg where
+  binds : List Rhs
+  ret   : Atom
+  deriving Repr
+
+@[simp] def Rhs.eval (mem : Mem) (args slots : List Word) : Rhs → Word
+  | .alu op a b => op.apply (a.eval args slots) (b.eval args slots)
+  | .load addr  => mem (addr.eval args slots)
+
+/-- Thread the SSA slots left-to-right under a fixed memory, then read `ret`. -/
+@[simp] def mevalGo (mem : Mem) (args : List Word) (ret : Atom) : List Rhs → List Word → Word
+  | [],      slots => ret.eval args slots
+  | r :: rs, slots => mevalGo mem args ret rs (slots ++ [r.eval mem args slots])
+
+@[simp] def MProg.eval (mem : Mem) (p : MProg) (args : List Word) : Word :=
+  mevalGo mem args p.ret p.binds []
+
+open Rhs
+
+/-- `uint32_t load_add(uint32_t* p){ return p[0] + p[1]; }` — reads the words at
+`p` and `p+4`. Straight-line, two loads, no store/call/branch. -/
+def load_add : MProg :=
+  { binds := [ load (arg 0)                 -- slot0 = *p
+             , alu add (arg 0) (imm 4)       -- slot1 = p + 4
+             , load (slot 1)                 -- slot2 = *(p+4)
+             , alu add (slot 0) (slot 2) ]   -- slot3 = slot0 + slot2
+  , ret := slot 3 }
+
+/-- The lift means exactly `mem[p] + mem[p+4]`, for **all** memories and `p`. -/
+theorem load_add_correct (mem : Mem) (p : Word) :
+    load_add.eval mem [p] = mem p + mem (p + 4) := by
+  simp [load_add, MProg.eval, mevalGo]
+
+/-- Equivalence under memory: summing the two loads in the other order gives the
+same value — `bv_decide`, with the loads abstracted as opaque terms. -/
+theorem load_add_comm (mem : Mem) (p : Word) :
+    load_add.eval mem [p] = mem (p + 4) + mem p := by
+  simp only [load_add, MProg.eval, mevalGo, Rhs.eval, Atom.eval, Op.apply,
+             List.getD_cons_zero, List.getD_cons_succ, List.nil_append, List.cons_append]
+  bv_decide
+
 end FlowrefDecompiler.IL
