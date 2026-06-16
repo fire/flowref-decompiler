@@ -1,8 +1,9 @@
 # flowref
 
-**Point it at a binary, get back compilable C — and a proof the C returns what
-the original did.** A control-flow-aware xref finder and a small decompiler,
-written in Lean 4.
+**Point it at a binary, get back compilable C you can actually read.** A
+control-flow-aware xref finder and a small decompiler, written in Lean 4. For
+*simple* functions it goes further and **machine-checks** that the C returns the
+same value as the source — see *Equivalence* for exactly which.
 
 ```bash
 flowref list   a.out                 # what functions are in here?
@@ -10,25 +11,20 @@ flowref decompile a.out main         # lift one to C (region read from the ELF)
 flowref decompile a.out main | gcc -xc -std=c11 -w -fsyntax-only -   # it compiles
 ```
 
+Real output, for a function taking two args and returning their sum:
+
 ```c
-uint32_t sub_1000(void) {
-  uint32_t eax_0 = 0;
-  eax_0 = 0;
-  uint32_t ebx_0 = 0xa;
-  while (!((int32_t)eax_0 >= (int32_t)ebx_0)) {
-    uint32_t eax_1 = eax_0 + 1;
-  }
-  if (!((int32_t)ebx_0 != (int32_t)0xa)) {
-    uint32_t ecx_0 = 1;
-  }
-  return eax_0;
+uint32_t sub_401000(uint32_t a0, uint32_t a1) {
+  uint32_t eax_0 = a0;
+  uint32_t eax_1 = eax_0 + a1;
+  return eax_1;
 }
 ```
 
-The output is meant to be **read and trusted**: values declared where they're
-computed, real `if`/`while` instead of `goto`, no machine noise. The style
-follows NASA/JPL's *Power of Ten* (simple control flow, smallest scope) so it's
-easy to teach from and to review.
+The output is meant to be **read**: values declared where they're computed, real
+`if`/`while` instead of `goto`, parameters recovered from the calling
+convention, no machine noise. The style follows NASA/JPL's *Power of Ten* (simple
+control flow, smallest scope) so it's easy to teach from and to review.
 
 ## Commands
 
@@ -45,12 +41,40 @@ headers — give a symbol or `0x` address, not six hex numbers. For raw blobs,
 pass them explicitly: `flowref decompile <bin> <arch> <fnVaddr> <fileOff> <vaddr> <len>`
 (run `flowref --help` for the full list, including `.asm`-listing input).
 
+## Equivalence
+
+The goal is C that is both type-correct *and* returns the same value as the
+original. This is **checked, not asserted**: the oracle `decompile-bench/equiv.sh`
+compiles, links and *runs* the lifted C against the reference source and compares
+return values.
+
+What is proven **today**: parameterless, register-only **leaf** functions. The
+bundled demo proves 4/4 —
+
+```text
+$ decompile-bench/equiv-demo.sh
+  k7     … EQUIVALENT  (both return 7)
+  kshift … EQUIVALENT  (both return 16)
+  kxor   … EQUIVALENT  (both return 240)
+  kchain … EQUIVALENT  (both return 12)
+  RESULT: 4/4 proven functionally equivalent to their source.
+```
+
+Faithful C is the **bar, not a bonus.** `flowref decompile` emits C **only** for
+the class it can lift exactly — a straight-line, register-only leaf. For anything
+else (control flow, memory, calls) it is a **hard error**: a non-zero exit and
+**nothing on stdout** — flowref never prints C it cannot stand behind. Closing
+those gaps (parameters, memory, full control flow) is the job, not an excuse; the
+current edge is in *Limitations*.
+
+```text
+$ flowref decompile a.out has_a_loop ; echo "exit=$?"
+error: function is not faithfully liftable (control flow / memory / calls); flowref refuses to emit unverified C
+exit=5
+```
+
 ## How it works
 
-- **Equivalence is the point.** The emitted C must be both type-correct *and*
-  return the same value as the source. An oracle (`decompile-bench/equiv.sh`)
-  compiles, links and *runs* the lifted C against the reference to check it,
-  reporting `INCOMPARABLE` rather than ever claiming a false equivalence.
 - **Plausible-driven, no hand-rolled analysis.** Every data-flow fact (reaching
   defs, back-edges, reachability) is recovered as a *counterexample* from
   [`plausible`](https://github.com/leanprover-community/plausible), deepened
@@ -74,11 +98,13 @@ library to install.
 
 ## Limitations
 
-A **lead-finder and MVP decompiler, not Ghidra.** Equivalence is proven today for
-register-only leaf functions; larger functions lift to compilable C but are not
-yet guaranteed faithful (no float/struct/varargs ABI, register-level model,
-irreducible control flow falls back to `goto`). Very large functions can hit the
-search budget. See `decompile-bench/README.md` for the evaluation and open gaps.
+Faithful output is the standard; today flowref *meets* it only for straight-line,
+register-only leaf functions (equivalence proven 4/4). Everything else — control
+flow, memory, calls, parameters beyond simple register args, float/struct/varargs
+ABI — is an **open gap, not a finished feature**, and `decompile` refuses it with
+a hard error rather than emit something unverified. `xref` and `list` still work
+on any binary. Closing these gaps (so more functions lift *faithfully*, not just
+*compilably*) is the roadmap; see `decompile-bench/README.md`.
 
 ## License
 

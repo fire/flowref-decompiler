@@ -79,12 +79,13 @@ def usageText : String :=
   "works with the resolution note still shown on the terminal.\n"
 
 /-- Build the full compilable C translation unit for a function. Returns the C
-text plus the search trace. `verbose`/header comments are part of the C as
-comments (still C-legal). -/
-def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String × Array TraceEntry) := do
+text, the search trace, and a **faithful** flag: `true` iff the lift is exact
+(straight-line, register-only leaf) so the result may be emitted as real output;
+`false` means it must not be passed off as correct. -/
+def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String × Array TraceEntry × Bool) := do
   let nI := insns.size
   if nI == 0 then
-    pure (cPreamble ++ "uint32_t sub_" ++ hex fnVa ++ "(void) { return 0; }\n", #[])
+    pure (cPreamble ++ "uint32_t sub_" ++ hex fnVa ++ "(void) { return 0; }\n", #[], false)
   else
   -- address → index
   let mut addr2idx : Std.HashMap Nat Nat := {}
@@ -521,11 +522,24 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
       | none => true
     else true))
 
-  -- ===== assemble: preamble + header comment + prototypes + signature =====
+  -- ===== faithfulness gate =====
+  -- Faithfulness is the bar, not a bonus. flowref's lift is *exact* only for a
+  -- straight-line, register-only leaf: one basic block (no control flow to
+  -- mis-structure), no memory (no aliasing), no calls (no unknown effects). For
+  -- that class the SSA + emission reproduce the source's return value, and the
+  -- equivalence oracle proves it. Anything else is NOT faithfully liftable yet —
+  -- the caller refuses to print it as if it were correct (see `decompileInsns`).
+  let hasCall := insns.any (fun i => i.mn == "call" ∨ (a == .ppc ∧ (i.mn == "bl" ∨ i.mn == "bctrl")))
+  let hasMemOp := insns.any (fun i => hasMem i.ops)
+  let faithful := nB == 1 ∧ ¬ hasCall ∧ ¬ hasMemOp
   let mut out : String := cPreamble
   out := out ++ s!"\n/* flowref decompile @ 0x{hex fnVa} — {nI} insns, {nB} blocks, {defSites.size} SSA defs\n"
   out := out ++ s!"   loops (plausible back-edge: {loopRes.isFailure}): {loopHeaders}; conditionals: {condBlocks}\n"
-  out := out ++ s!"   calling convention: {repr pm.conv}, recovered params: {pm.count} */\n\n"
+  out := out ++ s!"   calling convention: {repr pm.conv}, recovered params: {pm.count}\n"
+  if faithful then
+    out := out ++ "   equivalence: faithful lift (straight-line register-only leaf) — provable by decompile-bench/equiv.sh */\n\n"
+  else
+    out := out ++ "   equivalence: NOT faithful — outside the liftable class (control flow / memory / calls); do not trust */\n\n"
   for t in calledSubs.toList do
     if t == fnVa ∧ pm.count > 0 then
       out := out ++ s!"uint32_t sub_{hex t}({paramList});\n"
@@ -541,7 +555,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   out := out ++ declLines
   if ¬ declLines.isEmpty then out := out ++ "\n"
   out := out ++ body
-  pure (out, trace)
+  pure (out, trace, faithful)
 
 /-- Extract the recovered C signature line (`uint32_t sub_…(…)`) from a TU, or
 `""` if absent. Used for the `--json` `signature` field. -/
@@ -551,10 +565,21 @@ def signatureOf (c : String) : String :=
   | none => ""
 
 /-- Pretty (commented) decompile to stdout, plus optional trace to stderr.
-With `json`, emit a single `{signature, c, trace}` object instead of raw C. -/
+With `json`, emit a single `{signature, c, trace}` object instead of raw C.
+
+With `strict` (the default, used by the real `decompile` command), a function
+that is **not faithfully liftable** is a hard error: nothing is written to
+stdout and the process exits non-zero — flowref never prints C it cannot stand
+behind. `strict := false` is for the `demo` illustrations, which show the lift
+mechanism with the `equivalence: NOT faithful` banner. -/
 def decompileInsns (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat)
-    (showTrace : Bool) (json : Bool := false) : IO Unit := do
-  let (c, trace) ← emitC a bits insns fnVa
+    (showTrace : Bool) (json : Bool := false) (strict : Bool := true) : IO Unit := do
+  let (c, trace, faithful) ← emitC a bits insns fnVa
+  if strict ∧ ¬ faithful then
+    let msg := "function is not faithfully liftable (control flow / memory / calls); flowref refuses to emit unverified C"
+    if json then IO.println (Json.mkObj [("error", Json.str msg), ("faithful", Json.bool false)]).compress
+    else IO.eprintln s!"error: {msg}"
+    IO.Process.exit 5
   if json then
     let traceJson := trace.map (fun te =>
       let oc := match te.outcome with
@@ -661,8 +686,8 @@ def demoCdeclInsns : Array Ins :=
 /-- Run the parameter-model demo. With `emitC?` print only the C (for both
 functions) so it can be piped to a compiler; otherwise print a human report. -/
 def demoParams (emitC? : Bool) : IO Unit := do
-  let (sysvC, _) ← emitC .x86 .b64 demoSysvInsns 0x401000
-  let (cdeclC, _) ← emitC .x86 .b32 demoCdeclInsns 0x401100
+  let (sysvC, _, _) ← emitC .x86 .b64 demoSysvInsns 0x401000
+  let (cdeclC, _, _) ← emitC .x86 .b32 demoCdeclInsns 0x401100
   if emitC? then
     -- Two functions in one TU; rename the cdecl one so symbols don't collide.
     IO.print sysvC
@@ -684,7 +709,7 @@ def demoParams (emitC? : Bool) : IO Unit := do
 `emitCOnly`, print only the C translation unit (pipe to a compiler). -/
 def runDemoBasic (emitCOnly showTrace : Bool) : IO Unit := do
   if emitCOnly then
-    let (c, trace) ← emitC .x86 .b32 demoInsns 0x1000
+    let (c, trace, _) ← emitC .x86 .b32 demoInsns 0x1000
     IO.print c
     if showTrace then
       IO.eprintln "=== iterative-deepening search trace (demo) ==="
@@ -693,7 +718,8 @@ def runDemoBasic (emitCOnly showTrace : Bool) : IO Unit := do
     IO.println "=== synthetic disassembly (x86, base 0x1000) ==="
     for i in demoInsns do IO.println s!"  0x{hex i.addr}: {i.mn} {i.ops}"
     IO.println ""
-    decompileInsns .x86 .b32 demoInsns 0x1000 showTrace
+    -- a demo illustrates the lift mechanism; show it (banner flags it unverified).
+    decompileInsns .x86 .b32 demoInsns 0x1000 showTrace (strict := false)
 
 /-- Help for the `demo` subcommand family. -/
 def demoHelp : String :=
