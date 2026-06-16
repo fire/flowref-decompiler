@@ -97,6 +97,22 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- address → index
   let mut addr2idx : Std.HashMap Nat Nat := {}
   for i in [0:nI] do addr2idx := addr2idx.insert insns[i]!.addr i
+  -- The dep's `branchTarget` only parses a `0x`-prefixed target, but the decoder
+  -- prints small jump targets (0–9) as bare decimal (`jb 9`) — so compact forward
+  -- diamonds lost their branch and were mis-carved into one straight block. `btX`
+  -- adds the bare-digit case (parseImm reads 0–9 identically in hex/dec; the
+  -- decoder only omits `0x` for single digits). `cbtX` is the conditional form.
+  let btX : Ins → Option Nat := fun i =>
+    match branchTarget a i with
+    | some t => some t
+    | none =>
+      if a == .x86 ∧ (i.mn.startsWith "j" ∨ i.mn == "call" ∨ i.mn == "loop") then
+        let t := i.ops.trimAscii.toString
+        if ¬ t.isEmpty ∧ t.all (·.isDigit) then some (parseImm t).toNat else none
+      else none
+  let cbtX : Ins → Option Nat := fun i =>
+    if a == .x86 ∧ i.mn.startsWith "j" ∧ i.mn != "jmp" then btX i
+    else condBranchTarget a i
 
   -- ===== Pass 0: calling-convention parameter model =====
   -- Recover the function's integer/pointer parameters from the calling
@@ -136,12 +152,12 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   isLeader := isLeader.set! 0 true
   for i in [0:nI] do
     let ins := insns[i]!
-    match branchTarget a ins with
+    match btX ins with
     | some t => match addr2idx[t]? with
         | some j => isLeader := isLeader.set! j true
         | none => pure ()
     | none => pure ()
-    let terminates := isUncondJmp a ins ∨ (condBranchTarget a ins).isSome
+    let terminates := isUncondJmp a ins ∨ (cbtX ins).isSome
     if terminates ∧ i+1 < nI then isLeader := isLeader.set! (i+1) true
   let mut blocks : Array BB := #[]
   let mut idx2blk : Array Nat := Array.replicate nI 0
@@ -159,7 +175,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   blocks := blocks.map (fun b =>
     let last := insns[b.hi - 1]!
     let ft := if isUncondJmp a last ∨ b.hi ≥ nI then [] else [idx2blk[b.hi]!]
-    let bt := match branchTarget a last with
+    let bt := match btX last with
       | some t => match addr2idx[t]? with | some q => [idx2blk[q]!] | none => ([] : List Nat)
       | none => ([] : List Nat)
     { b with succ := (ft ++ bt).eraseDups })
@@ -277,7 +293,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   let loopRes ← Testable.checkIO loopProp ({ numInst := 2000, quiet := true } : Plausible.Configuration)
   let condBlocks := blocks.toList.filterMap (fun b =>
     let last := insns[b.hi - 1]!
-    if (condBranchTarget a last).isSome ∧ b.succ.length == 2 then some b.id else none)
+    if (cbtX last).isSome ∧ b.succ.length == 2 then some b.id else none)
 
   -- ===== collect declared locals: every SSA name + every register that appears =====
   -- x86 operand keywords that are not registers (size/segment specifiers).
@@ -346,13 +362,13 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   let blkLast := fun (b : Nat) => insns[(blocks[b]!).hi - 1]!
   let condTgtBlk := fun (b : Nat) =>
     let li := blkLast b
-    if (condBranchTarget a li).isSome then
-      match branchTarget a li with | some t => (addr2idx[t]?).map (fun j => idx2blk[j]!) | none => none
+    if (cbtX li).isSome then
+      match btX li with | some t => (addr2idx[t]?).map (fun j => idx2blk[j]!) | none => none
     else none
   let uncondTgtBlk := fun (b : Nat) =>
     let li := blkLast b
     if isUncondJmp a li ∧ ¬ (li.mn.startsWith "ret" ∨ li.mn == "blr") then
-      match branchTarget a li with | some t => (addr2idx[t]?).map (fun j => idx2blk[j]!) | none => none
+      match btX li with | some t => (addr2idx[t]?).map (fun j => idx2blk[j]!) | none => none
     else none
   let whileHdr : Std.HashMap Nat (Nat × Nat) := Id.run do   -- header → (exitBlk, tailBlk)
     let mut m : Std.HashMap Nat (Nat × Nat) := {}
@@ -409,7 +425,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   let labeledBlk : Std.HashSet Nat := Id.run do
     let mut s : Std.HashSet Nat := {}
     for q in [0:nI] do
-      match branchTarget a insns[q]! with
+      match btX insns[q]! with
       | some t => match addr2idx[t]? with | some jj => s := s.insert idx2blk[jj]! | none => pure ()
       | none => pure ()
     pure s
@@ -419,7 +435,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   for q in [0:nI] do
     let ins := insns[q]!
     if ins.mn == "call" ∨ (a == .ppc ∧ (ins.mn == "bl" ∨ ins.mn == "bctrl")) then
-      match branchTarget a ins with
+      match btX ins with
       | some t => calledSubs := calledSubs.insert t
       | none => pure ()
 
@@ -585,7 +601,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
       | _ => closing := false
     let bb := blocks[b]!
     let li := insns[bb.hi - 1]!
-    let hasTerm := isUncondJmp a li ∨ (condBranchTarget a li).isSome
+    let hasTerm := isUncondJmp a li ∨ (cbtX li).isSome
     let stmtHi := if hasTerm then bb.hi - 1 else bb.hi
     -- open a loop region if this block is a recognised header.
     let mut termConsumed := false
@@ -612,7 +628,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
         let cond := predOf b
         stack := stack.drop 1
         body := body ++ padFor (stack.length + 1) ++ "} while (" ++ cond ++ ");\n"
-      else if (condBranchTarget a li).isSome then
+      else if (cbtX li).isSome then
         match condTgtBlk b with
         | some tb =>
           let nestOk : Bool := match stack with | (0, k, _) :: _ => decide (tb ≤ k) | _ => true
