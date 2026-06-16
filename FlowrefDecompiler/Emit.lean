@@ -109,7 +109,14 @@ def renderExprC (a : A) (i : Ins) (subs : List (String × String)) : String :=
     regSubs.foldl (fun (acc : String) (p : String × String) =>
       let (rg, nm) := p
       String.intercalate nm (acc.splitOn rg)) s
-  let raw := rhsText a i
+  -- `neg`/`not` are single-operand defs the shared `rhsText` does not model (it
+  -- returns the raw operand). Render the unary as C over the operand register, so
+  -- after substitution `neg eax` → `(0u - eax_0)`, `not eax` → `(~ eax_0)`.
+  let raw :=
+    if i.mn == "neg" ∨ i.mn == "not" then
+      let d := ((i.ops.splitOn ",").headD "").trimAscii.toString
+      if i.mn == "neg" then s!"0u - {d}" else s!"~ {d}"
+    else rhsText a i
   if i.mn == "lea" then
     -- `lea dst, [expr]` computes the ADDRESS `expr` — it is register arithmetic,
     -- NOT a memory load. Emit the bracket contents with registers substituted

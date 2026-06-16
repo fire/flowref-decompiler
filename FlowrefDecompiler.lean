@@ -192,7 +192,8 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     match writesReg arch i with
     | some r => some r
     | none   => match arch with
-                | .x86 => if i.mn.startsWith "cmov" ∧ ¬ (firstTok i).any (· == '[')
+                | .x86 => if (i.mn.startsWith "cmov" ∨ i.mn == "neg" ∨ i.mn == "not")
+                               ∧ ¬ (firstTok i).any (· == '[')
                           then some (firstTok i) else none
                 | _    => none
   -- ===== Pass 2: reaching definitions / SSA — PLAUSIBLE-DRIVEN + iterative deepening =====
@@ -216,13 +217,23 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
       trace := trace.push te
       match defsR with
       | [] =>
-        -- No reaching def inside the function ⇒ the value comes from the caller.
-        -- Under SysV this read is live-on-entry: if `r` is an in-range arg
-        -- register, bind it to its parameter name `a{k}` (a parameter is a
-        -- def-at-entry). This is the same `[]`-witness the param model uses.
-        match sysvParamForReg pm.count r with
-        | some nm => useToVer := useToVer.insert j (((useToVer.get? j).getD []) ++ [(r, nm)])
-        | none    => pure ()  -- genuine unknown source: leave as `r` (a local).
+        -- No reaching def inside the function via the dep's `writesReg`. Two cases:
+        -- (a) For a single-block leaf, the dep can return `[]` because an
+        --     intervening `neg`/`not`/`cmov` *clobbers* `r` on the path (so the
+        --     earlier def cannot reach) yet is not itself a `writesReg` def. Those
+        --     ARE defs under `writesRegX`, so the true reaching def is the latest
+        --     `defSites` def of `r` before `j`. Recover it here (straight-line ⇒
+        --     program order is the reaching order).
+        -- (b) Otherwise the value is live-on-entry: under SysV an in-range arg
+        --     register binds to its parameter name `a{k}` (a def-at-entry).
+        match (if nB == 1 then (defSites.filter (fun p => p.2 == r ∧ p.1 < j)).back? else none) with
+        | some (di, _) =>
+          let nm := cName ((ssaName.get? di).getD r)
+          useToVer := useToVer.insert j (((useToVer.get? j).getD []) ++ [(r, nm)])
+        | none =>
+          match sysvParamForReg pm.count r with
+          | some nm => useToVer := useToVer.insert j (((useToVer.get? j).getD []) ++ [(r, nm)])
+          | none    => pure ()  -- genuine unknown source: leave as `r` (a local).
       | [only] =>
         let nm := cName ((ssaName.get? only).getD r)
         useToVer := useToVer.insert j (((useToVer.get? j).getD []) ++ [(r, nm)])
@@ -604,13 +615,12 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- (setcc*, div, unknown …). `cmp` + a supported conditional move are modeled as
   -- a `(X op Y) ? src : dst` ternary (see `cmovRhs`); `test` is flag-only and
   -- dead unless consumed, so it is allowed too. Found by decompile-bench/algo-bench.sh.
-  -- NOTE: `neg`/`not` are deliberately EXCLUDED. The shared disassembler's
-  -- `writesReg` does not list them, so a `neg eax` is not recognised as an SSA
-  -- def and the value silently reads the previous (often uninitialised) version
-  -- — wrong C under a "faithful" banner. Refuse until they are modeled as defs.
+  -- `neg`/`not` are single-operand defs modeled via `writesRegX` (def of the
+  -- operand reg) + `renderExprC` (`0u - x` / `~x`); the dep's `writesReg`/`rhsText`
+  -- omit them, so both are handled in the production layer above.
   let modeledX86 : String → Bool := fun mn =>
     ["mov", "movsxd", "movzx", "movsx", "lea", "add", "sub", "and", "or", "xor",
-     "shl", "sal", "shr", "sar", "imul", "inc", "dec",
+     "shl", "sal", "shr", "sar", "imul", "neg", "not", "inc", "dec",
      "ret", "nop", "endbr64", "cmp", "test"].contains mn ∨ (cmovCondOp mn).isSome
   -- A conditional move is faithful ONLY if it has a preceding `cmp` to source its
   -- condition; otherwise refuse (cmovRhs would have no condition).
