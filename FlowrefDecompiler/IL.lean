@@ -651,137 +651,25 @@ theorem blockdevice_lock_render :
     (blockdevice_lock.render).evalU32 (fun _ => 0) = some (blockdevice_lock.eval []) := by
   simp [blockdevice_lock, Prog.eval, evalGo]
 
-/-! ## The lift bridge: decoded instructions → IL, in Lean.
+/-! ## The lift bridge: decoded instructions → IL, in Lean (unified lifter).
 
 The remaining harness infrastructure is the *lift* from decoded instructions to
-`Prog`. Capstone produces the instruction list; this is the other half — a
-minimal but real SSA lifter for straight-line register code: track each
-register's current value-source, emit a binding per ALU op (a fresh SSA slot),
-and treat `mov` as a copy. Run on the **real** `BlockDevice::Lock()` instruction
-sequence it reproduces the hand-lift, now mechanically. Arg-register mapping and
-the `Flowref.Disasm.Ins` adapter are the next pieces; this is the core. -/
+the IL. Capstone produces the instruction list; this is the other half. One
+unified lifter (`liftS`) targets `SProg` — the superset IL (statements: binds
+over ALU/load/select, plus stores) — so a single transform covers the whole
+operand/control range: registers, immediates, arg-registers (calling
+convention), ALU ops, memory loads (`base+disp`), stores, and conditional moves
+(`cmov`). It tracks each register's current value-source and emits one statement
+per instruction, threading SSA slots. Demonstrated below on the real
+`BlockDevice::Lock()` plus canonical compiled forms; the remaining piece is the
+`Flowref.Disasm.Ins` adapter (real bytes via Capstone) replacing the hand
+`SInsn`. -/
 
 /-- A decoded operand: a register name or an immediate. -/
 inductive Operand | reg (r : String) | imm (w : Word)
   deriving Repr
 
-/-- A decoded straight-line instruction (the shape a decoder hands us). -/
-inductive LInsn
-  | mov (dst : String) (src : Operand)            -- dst := src   (copy)
-  | bin (dst : String) (op : Op) (a b : Operand)  -- dst := op a b
-  | ret (src : String)                            -- return register `src`
-  deriving Repr
-
-/-- Lifter state: register → current IL source, emitted bindings, next slot. -/
-structure LSt where
-  regs  : List (String × Atom) := []
-  binds : List Bind            := []
-  n     : Nat                  := 0
-  retA  : Atom                 := .imm 0
-
-/-- Current IL source of register `r` (unmapped ⇒ treated as immediate 0; real
-arg-register init is the next step). -/
-@[simp] def LSt.get (s : LSt) (r : String) : Atom :=
-  ((s.regs.find? (·.1 = r)).map (·.2)).getD (.imm 0)
-
-/-- Resolve an operand to an IL atom. -/
-@[simp] def LSt.opnd (s : LSt) : Operand → Atom
-  | .reg r => s.get r
-  | .imm w => .imm w
-
-/-- Lift one instruction, threading the state. -/
-@[simp] def LSt.step (s : LSt) : LInsn → LSt
-  | .mov d src    => { s with regs := (d, s.opnd src) :: s.regs }
-  | .bin d op a b => { regs := (d, .slot s.n) :: s.regs,
-                       binds := s.binds ++ [⟨op, s.opnd a, s.opnd b⟩], n := s.n + 1, retA := s.retA }
-  | .ret r        => { s with retA := s.get r }
-
-/-- Lift a decoded sequence to an IL program. `argRegs` seeds the calling
-convention: the i-th register holds argument `i` on entry (SysV: `edi, esi, …`). -/
-@[simp] def lift (argRegs : List String) (is : List LInsn) : Prog :=
-  let s := is.foldl LSt.step { regs := argRegs.mapIdx (fun i r => (r, Atom.arg i)) }
-  { binds := s.binds, ret := s.retA }
-
-/-- The real `BlockDevice::Lock()` instructions: `movb $0x1, %al; ret`. -/
-def lockInsns : List LInsn := [ .mov "al" (.imm 1), .ret "al" ]
-
-/-- The lifter mechanically reproduces the hand-lift, and the result returns `1` —
-the first real corpus function lifted by code, not by hand. -/
-theorem lift_lock_correct : (lift [] lockInsns).eval [] = 1 := by decide
-
-/-- The canonical SysV compilation of `uint32_t add(uint32_t a, uint32_t b){
-    return a + b; }`: `mov %edi, %eax; add %esi, %eax; ret`. -/
-def addInsns : List LInsn :=
-  [ .mov "eax" (.reg "edi"), .bin "eax" add (.reg "eax") (.reg "esi"), .ret "eax" ]
-
-/-- With arg-register seeding, the lifter recovers `a + b` for **all** `a, b` —
-a two-argument function lifted from its instructions and proved by `bv_decide`. -/
-theorem lift_add_correct (a b : Word) : (lift ["edi", "esi"] addInsns).eval [a, b] = a + b := by
-  rw [show lift ["edi", "esi"] addInsns = p_add from rfl]; exact p_add_correct a b
-
-/-! ### Lifting memory operands → the memory IL (`MProg`).
-
-The register lifter targets `Prog`; loads need `MProg`. This memory lifter
-turns `load dst, disp(base)` into IL: when `disp ≠ 0` it first emits the address
-computation `base + disp` (a fresh slot), then the load — so a memory operand
-becomes provable IL. Run on `deref(p){ return *p; }` it yields the read `*p`. -/
-
-/-- A decoded instruction with memory loads (separate from `LInsn` so the
-register lifter stays total). -/
-inductive MInsn
-  | mov  (dst : String) (src : Operand)
-  | bin  (dst : String) (op : Op) (a b : Operand)
-  | load (dst : String) (base : String) (disp : Word)   -- dst := *(base + disp)
-  | ret  (src : String)
-  deriving Repr
-
-/-- Memory-lifter state: register → IL source, emitted `Rhs` bindings, next slot. -/
-structure MSt where
-  regs  : List (String × Atom) := []
-  binds : List Rhs             := []
-  n     : Nat                  := 0
-  retA  : Atom                 := .imm 0
-
-@[simp] def MSt.get (s : MSt) (r : String) : Atom :=
-  ((s.regs.find? (·.1 = r)).map (·.2)).getD (.imm 0)
-
-@[simp] def MSt.opnd (s : MSt) : Operand → Atom
-  | .reg r => s.get r
-  | .imm w => .imm w
-
-@[simp] def MSt.step (s : MSt) : MInsn → MSt
-  | .mov d src    => { s with regs := (d, s.opnd src) :: s.regs }
-  | .bin d op a b => { regs := (d, .slot s.n) :: s.regs,
-                       binds := s.binds ++ [.alu op (s.opnd a) (s.opnd b)], n := s.n + 1, retA := s.retA }
-  | .load d base 0 => { regs := (d, .slot s.n) :: s.regs,
-                        binds := s.binds ++ [.load (s.get base)], n := s.n + 1, retA := s.retA }
-  | .load d base disp => { regs := (d, .slot (s.n + 1)) :: s.regs,
-                           binds := s.binds ++ [.alu .add (s.get base) (.imm disp), .load (.slot s.n)],
-                           n := s.n + 2, retA := s.retA }
-  | .ret r        => { s with retA := s.get r }
-
-/-- Lift a sequence with memory loads to a memory IL program. -/
-@[simp] def liftM (argRegs : List String) (is : List MInsn) : MProg :=
-  let s := is.foldl MSt.step { regs := argRegs.mapIdx (fun i r => (r, Atom.arg i)) }
-  { binds := s.binds, ret := s.retA }
-
-/-- `uint32_t deref(uint32_t* p){ return *p; }`: `mov (%rdi), %eax; ret`. -/
-def derefInsns : List MInsn := [ .load "eax" "rdi" 0, .ret "eax" ]
-
-/-- The memory lifter recovers the load `*p` (= `mem p`) for **all** memories. -/
-theorem liftM_deref_correct (mem : Mem) (p : Word) :
-    (liftM ["rdi"] derefInsns).eval mem [p] = mem p := by
-  rw [show liftM ["rdi"] derefInsns = { binds := [Rhs.load (arg 0)], ret := slot 0 } from rfl]
-  simp [MProg.eval, mevalGo, Rhs.eval, Atom.eval]
-
-/-! ### Lifting stores → the statement IL (`SProg`).
-
-Stores are statements, so the store-capable lifter targets `SProg`. A
-`store disp(base), src` lifts to a `Stmt.store` (with an address-compute bind
-first when `disp ≠ 0`). Run on `store_load(p,v){ *p=v; return *p; }` it produces
-a store followed by a read-back, which provably returns the stored value `v`. -/
-
-/-- A decoded instruction including stores. -/
+/-- A decoded instruction: the unified instruction model for the lifter. -/
 inductive SInsn
   | mov   (dst : String) (src : Operand)
   | bin   (dst : String) (op : Op) (a b : Operand)
@@ -821,10 +709,32 @@ structure SSt where
                           stmts := s.stmts ++ [.bind (.sel (s.opnd cond) (s.opnd a) (s.opnd b))], n := s.n + 1, retA := s.retA }
   | .ret r         => { s with retA := s.get r }
 
-/-- Lift a sequence with stores to a statement IL program. -/
+/-- Lift a decoded sequence to a statement IL program. `argRegs` seeds the
+calling convention (SysV: `edi, esi, …` hold args `0, 1, …` on entry). -/
 @[simp] def liftS (argRegs : List String) (is : List SInsn) : SProg :=
   let s := is.foldl SSt.step { regs := argRegs.mapIdx (fun i r => (r, Atom.arg i)) }
   { stmts := s.stmts, ret := s.retA }
+
+/-! ### The unified lifter subsumes the earlier cases — one transform, all shapes. -/
+
+/-- Real `BlockDevice::Lock()` (`movb $0x1,%al; ret`) ⇒ returns `1`. -/
+theorem liftS_lock_correct : (liftS [] [ .mov "al" (.imm 1), .ret "al" ]).eval (fun _ => 0) [] = 1 := by
+  decide
+
+/-- `add(a,b)` (`mov %edi,%eax; add %esi,%eax; ret`) ⇒ `a + b`. -/
+theorem liftS_add_correct (mem : Mem) (a b : Word) :
+    (liftS ["edi", "esi"] [ .mov "eax" (.reg "edi"), .bin "eax" add (.reg "eax") (.reg "esi"), .ret "eax" ]).eval mem [a, b]
+      = a + b := by
+  rw [show (liftS ["edi", "esi"] [ SInsn.mov "eax" (.reg "edi"), .bin "eax" add (.reg "eax") (.reg "esi"), .ret "eax" ])
+        = { stmts := [.bind (.alu add (arg 0) (arg 1))], ret := slot 0 } from rfl]
+  simp [SProg.eval, sevalGo, Rhs.eval, Atom.eval, Op.apply]
+
+/-- `deref(p)` (`mov (%rdi),%eax; ret`) ⇒ `*p` (= `mem p`). -/
+theorem liftS_deref_correct (mem : Mem) (p : Word) :
+    (liftS ["rdi"] [ .load "eax" "rdi" 0, .ret "eax" ]).eval mem [p] = mem p := by
+  rw [show (liftS ["rdi"] [ SInsn.load "eax" "rdi" 0, .ret "eax" ])
+        = { stmts := [.bind (.load (arg 0))], ret := slot 0 } from rfl]
+  simp [SProg.eval, sevalGo, Rhs.eval, Atom.eval]
 
 /-- `uint32_t store_load(uint32_t* p, uint32_t v){ *p = v; return *p; }`. -/
 def storeLoadInsns : List SInsn := [ .store "rdi" 0 "esi", .load "eax" "rdi" 0, .ret "eax" ]
