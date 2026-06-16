@@ -12,7 +12,9 @@ require plausible from git
 require «lean-capstone» from git
   "https://github.com/fire/lean-capstone" @ "main"
 
-@[default_target] lean_lib Flowref
+@[default_target] lean_lib Flowref where
+  -- pick up Flowref.lean and every Flowref/*.lean submodule.
+  globs := #[.one `Flowref, .submodules `Flowref]
 
 @[default_target] lean_exe flowref where
   root := `Flowref

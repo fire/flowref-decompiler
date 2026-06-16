@@ -1,226 +1,204 @@
 # flowref
 
-**Control-flow-aware cross-reference search *and* a plausible-driven decompiler
-over machine-code disassembly, in Lean 4.**
+**A control-flow-aware cross-reference finder and a plausible-driven decompiler
+that emits *compilable* C — over machine-code disassembly, in Lean 4.**
 
-A linear disassembler lists instructions but won't tell you *where a constant or
-address is actually used* — the value is frequently built in one basic block and
+A linear disassembler lists instructions but won't tell you *where a value is
+defined versus used*: a value is frequently built in one basic block and
 consumed in another, so a straight-line scan loses the connection. `flowref`
-recovers it by walking the control-flow graph and tracking constant values
-through it. The `decompile` subcommand goes further: it lifts a whole function
-into structured pseudo-C.
+recovers it by walking the control-flow graph and tracking values through it.
+The `decompile` subcommand goes further: it lifts a whole function into a
+**complete C translation unit that `gcc -fsyntax-only -std=c11` accepts**.
 
 The defining design choice is that **every data-flow layer is driven by
-[`plausible`](https://github.com/leanprover-community/plausible) (property-based
-counterexample search), not by a hand-written fixpoint / worklist / dominator
-algorithm.** The original xref trick — pose `∀ candidate witness, ¬(it is the
-fact we want)` and let plausible hand back a *counterexample* that **is** the
-fact — is generalised from one target to every use, every back-edge, every
-reachability query. This is a deliberate trade-off (see *limitations*).
+[`plausible`](https://github.com/leanprover-community/plausible)
+(property-based counterexample search), not by a hand-written
+fixpoint / worklist / dominator algorithm.** The core trick — pose
+`∀ candidate witness, ¬(it is the fact we want)` and let plausible hand back a
+*counterexample* that **is** the fact — is generalised from one cross-reference
+target to every use, every back-edge, every reachability query. The searches
+are then **iteratively deepened** into a witness DAG (below). This is a
+deliberate trade-off (see *Limitations*).
 
 ## Commands
 
-```
-flowref xref      <binary> <arch> <targetHex> <fileOffHex> <vaddrHex> <lenHex>
-flowref decompile <binary> <arch> <fnVaddrHex> <fileOffHex> <vaddrHex> <lenHex>
-flowref --demo    # synthetic if + counting-loop self-test (no disk needed)
-flowref <binary> <arch> <targetHex> <fileOffHex> <vaddrHex> <lenHex>  # legacy xref
-```
+| Command | What it does |
+|---|---|
+| `flowref decompile <bin> <arch> <fnVaddr> <fileOff> <vaddr> <len>` | Lift a function to compilable C. |
+| `flowref xref <bin> <arch> <target> <fileOff> <vaddr> <len>` | Find def→use witnesses reaching `target`. |
+| `flowref <bin> <arch> <target> <fileOff> <vaddr> <len>` | Legacy positional form of `xref`. |
+| `flowref --demo` | Synthetic `if` + counting-loop self-test (no disk). |
+| `flowref --demo --emit-c` | Print only the C translation unit for the demo (pipe to a compiler). |
+| `flowref --demo-deep` | Demonstrate iterative-deepening escalation. |
+| `flowref --help` / `-h` | Full usage. |
+| `flowref --version` | Version string. |
+
+Add `--search-trace` to any analysis command to print the iterative-deepening
+escalation chain to stderr.
 
 `arch` ∈ {`x86` (32-bit), `ppc` (64-bit big-endian)}. The file offset and load
-address are separate because they differ in most executable formats.
+address are separate arguments because they differ in most executable formats
+(sections map to addresses unrelated to their on-disk position).
 
-## The idea — a "witness DAG", found by property-based search
+## Proper C output
 
-- A **def** materialises a constant base `B` into a register `R` at instruction `i`.
-- A **use** at instruction `j` forms `R + disp` and equals the target address.
-- They're linked by a control-flow path `i → … → j` along which `R` is never
-  clobbered — that path is the **witness**.
+`decompile` (and `--demo --emit-c`) emit a self-contained C11 translation unit:
 
-Instead of writing a bespoke fixpoint analysis, the search is posed as a
-property and discharged with [`plausible`](https://github.com/leanprover-community/plausible):
+* `#include <stdint.h>` + typedefs, forward prototypes for every called
+  `sub_*`, and a real `uint32_t sub_<addr>(void) { … }` definition.
+* Every SSA value is declared up front as a width-typed local
+  (`uint8_t`/`uint16_t`/`uint32_t`/`uint64_t`) with a C-legal name (`reg_version`).
+* Memory operands become real C: `*(uint32_t*)((uintptr_t)(esi + 4))`.
+* Calls become `sub_<tgt>();` (direct) or a function-pointer cast (indirect).
+* SSA φ is lowered away — there is no `φ(...)` in the output; each version is a
+  declared local and the value flows through plain assignments.
+* Control flow is **labels + `goto`** (always valid C), with conditions built
+  from the compare + branch (`if (cond_0) goto L4;`, where `cond_0` is a
+  declared, documented boolean temp).
 
-> `∀ candidate def-witness, ¬(it reaches a target-hitting use)`
+### Example — verified to compile
 
-A **counterexample to that property is exactly a witness** that locates the
-cross-block reference. This finds the case a linear constant-propagation pass
-misses: a base set in block A and used in block B reachable from A.
+```bash
+flowref --demo --emit-c | gcc -xc -std=c11 -w -fsyntax-only -   # exit status 0
+```
 
-Disassembly comes from [Capstone](https://github.com/capstone-engine/capstone),
-so the same engine works on every architecture Capstone supports. **x86** (32-bit)
-and **PowerPC** (64-bit, big-endian) are wired up here; adding another is a few
-lines (`defOf` / `useDisp` / `branchTarget` / `clobbers` / `isUncondJmp`).
+produces, for the synthetic `i = 0; n = 10; while (i < n) i++; if (n == 10) r = 1;`:
+
+```c
+#include <stdint.h>
+#include <stddef.h>
+
+uint32_t sub_1000(void) {
+  uint32_t eax_0 = 0;
+  uint32_t ecx_0 = 0;
+  uint32_t eax = 0;
+  uint32_t eax_1 = 0;
+  uint32_t ebx_0 = 0;
+  int cond_0 = 0;
+  int cond_1 = 0;
+
+L0:;
+  eax_0 = (uint32_t)(0);
+  ebx_0 = (uint32_t)(0xa);
+L1:;
+  cond_0 = ((int32_t)(eax_0) >= (int32_t)(ebx_0));
+  if (cond_0) goto L4;
+L2:;
+  eax_1 = (uint32_t)(eax_0 + 1);
+  goto L1;
+L3:;
+L4:;
+  cond_1 = ((int32_t)(ebx_0) != (int32_t)(0xa));
+  if (cond_1) goto L6;
+L5:;
+  ecx_0 = (uint32_t)(1);
+L6:;
+  return eax;
+}
+```
+
+The counting loop (`eax_1 = eax_0 + 1`, back-edge `L2 → L1`) and the `if` on
+`ebx == 0xa` are both recovered, with SSA versions, and the result compiles.
+
+## The plausible-driven design + iterative-deepening witness DAG
+
+Every data-flow fact is a **counterexample** to a plausible property:
+
+* **reaching definitions / SSA:** for each `(use j, register r)` we pose
+  `∀ candidate def i, ¬(i writes r ∧ a clobber-free CFG path i→…→j exists)`;
+  the counterexample is the reaching def, which is wired to the use's SSA
+  version (φ where several defs reach).
+* **loops:** `∀ edge (b→h), ¬(h reaches b ∧ the edge exists)`; the
+  counterexample is a back-edge → a loop header.
+
+A single fixed budget cannot serve both a 10-instruction leaf and a
+1000-instruction function. So each query carries a **level** `L` — a CFG-walk
+step budget, a plausible `Fin N` candidate window, and a plausible instance
+count. We run `L0` (cheap, shallow). If a query is *unresolved* — no witness
+**and** the budget was demonstrably hit (so we cannot conclude "provably none")
+— we **escalate** it to `L1`, then `L2`, up to a hard cap. This is iterative
+deepening. Resolved queries never re-run; only the unresolved frontier deepens.
+The escalation forms a DAG: each node's resolved result feeds dependents, and
+the deepening frontier is the set of still-unresolved nodes. The chain is
+recorded and printed with `--search-trace`.
+
+This is the project's "chain of conditional witnesses that deepen based on
+evidence — a witness DAG" idea, made literal (see `Flowref/Dataflow.lean`).
+
+### Demonstration
+
+```text
+$ flowref --demo-deep
+=== iterative-deepening demo: 103 insns, esi def at idx 0, use at idx 101 ===
+Per-level outcome for reaching-def query (esi @ the use):
+  L0 (walkSteps=64, Fin 256): UNRESOLVED (budget hit — escalate)
+  L1 (walkSteps=512, Fin 1024): RESOLVED (reaching def idx [0]) plausible-found=true
+  L2 (walkSteps=4000, Fin 4096): RESOLVED (reaching def idx [0]) plausible-found=true
+
+Adaptive driver resolved esi@use at level L1 with def(s) [0].
+The shallow L0 search could NOT resolve it (budget hit); deepening did.
+```
+
+The def→use path crosses 100 instructions, so the shallow L0 walk hits its step
+budget and reports *unresolved*; the deepened L1 walk crosses it and resolves
+the query. A purely fixed-budget search would have silently missed it.
 
 ## Build
 
 ```bash
 lake update                                                  # fetch deps (incl. lean-capstone)
 .lake/packages/lean-capstone/thirdparty/capstone/build.sh    # build libcapstone.a once
-lake build                                                   # builds the `flowref` executable
+lake build                                                   # builds the flowref executable
 ```
 
-## Usage
+`lean-capstone` provides the typed Capstone wrapper; its `build.sh` produces the
+static `libcapstone.a` that `flowref` links. The first build is slow because
+Capstone is compiled from source.
 
-```
-flowref <binary> <arch> <targetHex> <fileOffHex> <vaddrHex> <lenHex>
-```
-
-| arg          | meaning                                                        |
-|--------------|----------------------------------------------------------------|
-| `binary`     | path to the file to analyse                                    |
-| `arch`       | `x86` or `ppc` (default `x86`)                                 |
-| `targetHex`  | the address/constant to find references to (e.g. `0x4e54a3`)   |
-| `fileOffHex` | start offset of the region to disassemble                      |
-| `vaddrHex`   | virtual/load address that `fileOff` maps to                    |
-| `lenHex`     | length of the region to disassemble                            |
-
-The file offset and load address are separate arguments because they differ in
-most executable formats (sections are mapped to addresses unrelated to their
-on-disk position). Read the mapping from the file's section table first.
-
-### Example
+## Test
 
 ```bash
-# Find where the address 0x550e70 is referenced within a .text window.
-flowref ./program x86 0x550e70 0x1000 0x401000 0x111220
-# → FOUND a witness DAG to target … ~ def @0x… (reg=…) → use @0x…
+./run-tests.sh
 ```
 
-It prints the candidate def-witnesses, and for each one that reaches the target
-the located `def → use` pair (with addresses), so you can jump straight to the
-referencing code.
+A single command that builds, runs the demos, pipes the emitted C through `gcc`
+(both `-fsyntax-only` and `-c`), checks the iterative-deepening escalation, and
+verifies error handling. It exits non-zero on any failure. CI runs the same
+script (`.github/workflows/ci.yml`); the cold-cache CI run is slow because it
+builds Capstone from source.
 
-## How it works (internals)
+## Module layout
 
-1. Disassemble the region with Capstone into `(addr, mnemonic, operands)`.
-2. Build a successor map (fall-through + branch/call edge) — the CFG.
-3. Collect **def** instructions that materialise a constant near the target.
-4. For each def, BFS forward over the CFG, preserving the base register until it
-   is clobbered, and report a **use** whose `value + displacement == target`.
-5. Drive the per-def search with `plausible`'s counterexample mechanism.
+| File | Responsibility |
+|---|---|
+| `Flowref/Disasm.lean` | Instruction model, per-arch patterns, CFG carving (plain code). |
+| `Flowref/Dataflow.lean` | Plausible-driven reaching defs + iterative-deepening DAG. |
+| `Flowref/Emit.lean` | Compilable-C name/type/operand lowering. |
+| `Flowref.lean` | CLI, orchestration, C emission, demos. |
 
-## Decompile — the plausible-driven pipeline
+## Limitations (honest scope)
 
-`flowref decompile <bin> <arch> <fnVaddr> <fileOff> <vaddr> <len>` lifts the
-function in that region to pseudo-C. The pipeline:
+This is a **lead-finder and an MVP decompiler, not Ghidra or Hex-Rays.**
 
-1. **CFG (plain structural code).** Disassemble the region, mark block leaders
-   (entry, branch targets, instructions after a transfer), carve basic blocks,
-   and compute successor edges (fall-through + branch target). This step is not
-   data-flow, so it is ordinary code.
-2. **Reaching definitions / SSA-lite — *plausible-driven*.** For **every**
-   `(use-instruction j, register r)` pair we pose
-   `∀ candidate def i, ¬(i writes r ∧ a clobber-free CFG path i→…→j exists)`
-   and let plausible search for the counterexample, which is the reaching def.
-   Each def site gets a fresh SSA version (`r#0`, `r#1`, …); each use is wired to
-   its reaching def's version. Where more than one def reaches a use, a **phi**
-   `φ(r#a, r#b)` is recorded. This is the original xref trick applied globally.
-3. **Expression reconstruction.** Each SSA value's right-hand side is rebuilt by
-   substituting operand-uses with their reaching def's RHS, stopping at memory
-   loads, calls, phis, and function arguments (e.g. `eax#1 = eax#0 + 1`).
-4. **Control-flow structuring — *plausible-driven*.** Loops are found as
-   back-edges via `∀ edge (b→h), ¬(h precedes b ∧ h reaches b)`; the
-   counterexample is a back-edge → loop header. If/else is found by locating a
-   conditional block whose successors re-merge — the merge point comes from
-   reachability witnesses, **not** a dominator algorithm.
-5. **Pseudo-C emission.** Walk the structured result and print readable
-   pseudo-C: labelled blocks, `if (...) goto`, loop-header annotations,
-   SSA-named assignments with reconstructed expressions, `call`s, and `return`.
-
-The emitted pseudo-C is a faithful, readable structured rendering; it is **not**
-meant to compile or to be type-correct.
-
-### Example — synthetic self-test
-
-`flowref --demo` hand-assembles a tiny x86 snippet (`i = 0; n = 10; while (i <
-n) i++; if (n == 10) r = 1;`) and decompiles it:
-
-```
-// 11 insns, 7 basic blocks, 4 SSA defs, 0 phi(s)
-// loop headers: [1]   (plausible found back-edge: true)
-// if/else conditional blocks: [1, 4]
-
-void sub_1000() {
-  L0:
-    eax#0 = 0;
-    ebx#0 = 0xa;
-  // loop header (while keeping cmp eax#0, ebx#0  /* jge */); back-edges close here
-  L1:
-    if (cmp eax#0, ebx#0  /* jge */) goto L4;
-  L2:
-    eax#1 = eax#0 + 1;
-    goto L1;
-  ...
-  L4:
-    if (cmp ebx#0, 0xa  /* jne */) goto L6;
-  L5:
-    ecx#0 = 1;
-  L6:
-    return;
-}
-```
-
-The counting loop (`eax#1 = eax#0 + 1`, back-edge `L2→L1`) and the `if` on
-`ebx == 0xa` are both recovered, with sensible SSA versions.
-
-### Example — a real leaf function
-
-Run on a small leaf in an x86 PE (file offset = vaddr − image base):
-
-```
-void sub_401010() {
-  L0:
-    push esi;
-    esi#0 = ecx;
-    mov dword ptr [esi], 0x513794;     // store a vtable/const through `this`
-    call dword ptr [0x51330c];
-    if (test byte ptr [esp + 8], 1  /* je */) goto L2;
-  L1:
-    push esi;
-    call 0x4b44a6;                     // conditional cleanup
-    esp#0 = esp + 4;
-  L2:
-    eax#0 = esi#0;                     // return this
-    pop esi;
-    return;
-}
-```
-
-## Status & limitations
-
-- Pattern coverage is intentionally small and conservative (clear, auditable
-  rules over Capstone's textual operands rather than a full IR). It is meant as
-  a lead-finder for reverse engineering, not a sound decompiler.
-- It tracks **register-materialised** constants (`mov`/`lis`+`addi`/…). Values
-  loaded *whole* from a table (e.g. a PowerPC TOC pointer) are not yet modelled;
-  adding a table-load `defOf` is a natural extension.
-- The CFG walk is bounded (depth cap) and ignores indirect branches.
-
-### Decompiler limitations (honest scope)
-
-This is an **MVP decompiler, not Ghidra or Hex-Rays.** It is genuinely useful
-for small leaf and lightly-branched functions, and the structure it recovers
-(blocks, loops, if/else, SSA assignments, reconstructed arithmetic) is faithful.
-But:
-
-- **Bounded plausible search.** Every data-flow query runs plausible with a
-  finite instance budget and a candidate window of 4096 indices; the
-  deterministic recovery that reads the witness back out is also depth-capped.
-  Large or obfuscated functions can therefore be **slow or incomplete** — that
-  is the deliberate, declared trade-off of the plausible-driven design, chosen
-  over classical worklist/SSA/dominator algorithms by intent.
-- **No nested structuring.** Loops and if/else are *detected and annotated*, and
-  the body is emitted as labelled blocks with `goto`s, but the renderer does not
-  fully nest `while {…}` / `if {…} else {…}` braces around recovered regions.
+- **Compiles, not semantically perfect.** The emitted C is guaranteed to parse
+  and type-check as C11; it is *not* guaranteed to reproduce the original
+  behaviour. Calling conventions, types, and flags are not inferred. Control
+  flow is rendered with `goto` rather than fully nested `while`/`if` braces.
+- **Bounded, deepening plausible search.** Every data-flow query runs plausible
+  with a finite instance budget and a bounded CFG walk, escalated by iterative
+  deepening up to a hard cap. Very large or obfuscated functions can still be
+  slow or hit the cap — that is the deliberate trade-off of the plausible-driven
+  design, chosen over classical worklist/SSA/dominator algorithms by intent.
 - **Register-level, textual operand model.** Sub-register aliasing
-  (`al`/`ax`/`eax`), flags, memory SSA, and indirect/computed branches are not
-  modelled; phis are detected but not minimised. Calling conventions and types
-  are not inferred — the pseudo-C does not compile and is not type-correct.
-- It reuses the conservative `defOf`/`useDisp`/`clobbers` patterns, so the same
-  coverage caveats as the xref pass apply.
+  (`al`/`ax`/`eax`), memory SSA, and indirect/computed branches are not
+  modelled; φ nodes are detected and lowered but not minimised.
+- **Conservative patterns.** `defOf`/`useDisp`/`clobbers`/`writesReg` are small,
+  auditable rules over Capstone's textual operands; whole-table loads and
+  exotic addressing forms are not yet covered. Adding an architecture is a few
+  lines in `Flowref/Disasm.lean`.
 
 ## License
 
 `flowref` is MIT-licensed (see `LICENSE`). Disassembly is provided by
-[`lean-capstone`](https://github.com/fire/lean-capstone), a separate dependency
-that wraps Capstone (BSD-3-Clause, © the Capstone authors).
+[`lean-capstone`](https://github.com/fire/lean-capstone), which wraps Capstone
+(BSD-3-Clause, © the Capstone authors).

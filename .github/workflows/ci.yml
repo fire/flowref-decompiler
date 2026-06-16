@@ -1,0 +1,60 @@
+name: ci
+
+# Build flowref and run the test suite (build + demos + gcc compile checks).
+# NOTE: the first run builds Capstone from source (the lean-capstone dependency
+# produces libcapstone.a via its thirdparty build script), which can take
+# several minutes. Subsequent runs reuse the Lake/elan caches.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build tools (git, cmake, cc) for the Capstone dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git cmake build-essential
+
+      - name: Install the Lean toolchain (elan)
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Cache Lake packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            .lake/packages
+            ~/.elan
+          key: lake-${{ runner.os }}-${{ hashFiles('lake-manifest.json', 'lean-toolchain') }}
+          restore-keys: |
+            lake-${{ runner.os }}-
+
+      - name: Fetch dependencies
+        run: lake update
+
+      - name: Build libcapstone.a (may be slow on a cold cache)
+        run: |
+          BUILD=.lake/packages/lean-capstone/thirdparty/capstone/build.sh
+          LIB=.lake/packages/lean-capstone/thirdparty/capstone/lib/libcapstone.a
+          if [ ! -f "$LIB" ]; then
+            chmod +x "$BUILD" || true
+            "$BUILD"
+          fi
+          test -f "$LIB"
+
+      - name: Build flowref
+        run: lake build
+
+      - name: Run test suite (demos + gcc compile checks + iterative-deepening)
+        run: ./run-tests.sh
