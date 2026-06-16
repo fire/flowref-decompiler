@@ -56,7 +56,8 @@ never a false pass. (The earlier size-biased `plausible` sampler missed bugs tha
 only diverge at large inputs — see `TOMBSTONES.md`.)
 
 What is proven **today** is the whole **single-basic-block leaf/flag/select
-class** plus the first compact branch-diamond return-select bridge, with
+class** plus compact branch-diamond select bridges (return-select and first
+merge-φ value-select use), with
 parameters: ALU, `neg`/`not`, `movzx`/`movsx`, variable shifts,
 scaled+displaced `lea`, 1/2/3-operand `imul`, register-width aliasing, `cmp`+`cmov`
 chains of any length, add/sub-carry and `test`-ZF conditional moves, and `setcc`
@@ -66,8 +67,8 @@ chains of any length, add/sub-carry and `test`-ZF conditional moves, and `setcc`
 ```text
 $ ./decompile-bench/algo-bench.sh
   …
-  STRICT  : 43/59 proven EQUIVALENT (machine-checked)
-  UNSAFE  : 59/59 emit C that compiles (best-effort coverage signal)
+  STRICT  : 44/60 proven EQUIVALENT (machine-checked)
+  UNSAFE  : 60/60 emit C that compiles (best-effort coverage signal)
   SOUNDNESS: 0 violations (no strict lift was wrong).
 
 $ ./decompile-bench/equiv-demo.sh
@@ -129,9 +130,10 @@ dependency rather than this repo.
 ## Limitations
 
 Faithful output is the standard. Today flowref *meets* it for the entire
-**single-basic-block** leaf/flag/select class (above) and one narrow, proven
-multi-block bridge: a compact forward branch diamond that only selects the return
-register. Everything beyond that narrow branch-select shape — general branches,
+**single-basic-block** leaf/flag/select class (above) and two narrow, proven
+multi-block bridges: compact forward branch diamonds that select either the
+return register or a merge φ value used by later modeled straight-line code.
+Everything beyond that narrow branch-select shape — general branches,
 loops, **memory**, or **calls** — is an **open gap, not a finished feature**, and
 `decompile` refuses it with a hard error rather than emit something unverified.
 `xref` and `list` still work on any binary. The live edge — what is being modeled

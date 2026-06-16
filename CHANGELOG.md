@@ -29,9 +29,9 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
   decode → CFG/reaching-defs/params → emit+gate → `flowref-equiv` oracle. See the
   `flowref-mvp` skill for the load-bearing core.
 - **Modeled & proven leaf/flag/select class is saturated** (every single-block
-  function in the bench proven), and the first compact branch-diamond return-select
-  bridge is now strict for both unsigned and signed branch predicates. Strict
-  **43/59 EQUIVALENT, 0 violations**, UNSAFE 59/59 compile. Modeled: ALU,
+  function in the bench proven), and compact branch-diamond select bridges are now
+  strict for return-register selects and the first merge-φ value-select use. Strict
+  **44/60 EQUIVALENT, 0 violations**, UNSAFE 60/60 compile. Modeled: ALU,
   neg/not, movzx/movsx (both signs), variable shifts,
   scaled+displaced `lea`, 1/2/3-operand `imul`, register-width aliasing (canonReg),
   cmp+cmov chains of any length, add/sub-carry (CF) cmov, test-ZF cmov, and `setcc`
@@ -78,3 +78,6 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
   first branch→select strict bridge lowers a three-block return diamond to a ternary.
 - x86 branch predicates now distinguish signed (`jl`/`jle`/`jg`/`jge`) from
   unsigned (`jb`/`jbe`/`ja`/`jae`) comparisons when emitting C predicates.
+- Merge φ uses in a compact branch diamond now lower to an explicit ternary when
+  both branch-arm definitions are matched to the reaching-def witness set; φ-arm
+  SSA values are kept in outer scope so generated C remains compilable.

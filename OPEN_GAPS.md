@@ -9,16 +9,16 @@ The leaf/flag/select/forwarding-call class is saturated, so the old "raise stric
 count on leaves" is essentially exhausted. Control flow / memory / calls hold the
 remaining value. Current order, highest first:
 
-1. **Broaden branch→select lifting beyond the first return diamond.**
-   The first strict bridge is done: a compact 3-block forward branch diamond that
-   only selects the return register now lowers to a ternary and proves in the
-   oracle (`branch_select`). The remaining gateway is the general φ case: a use
-   with multiple reaching defs across a 2-way conditional still lowers to an opaque
-   `r_phi` local in `useToVer` (FlowrefDecompiler.lean, the `many` branch).
-   **Next decisive action:** match each reaching def to its branch direction
-   (taken vs fallthrough) for a reconverging diamond whose merge use is not just
-   `ret`, emit `predOf ? def_then : def_else`, then widen the faithful gate only
-   after the oracle proves the new bench case.
+1. **Broaden branch→select lifting beyond compact diamonds.**
+   Strict bridges are done for compact 3-block forward branch diamonds that select
+   the return register (`branch_select`, signed and unsigned predicates) and for
+   the first merge-φ value use (`branch_phi_add`). The next gateway is multi-use or
+   multi-instruction merge blocks where several modeled operations consume the same
+   selected value, and then diamonds whose branch arms compute more than one live
+   value.
+   **Next decisive action:** add the smallest second φ fixture with two merge uses
+   of the selected register, prove both uses lower to the same ternary without
+   scope leaks, then widen the faithful gate only after the oracle proves it.
 
 2. **Single-block memory in production.** Loads/stores for register+memory leaves.
    The IL already proves load/store/aliasing on real bytes; no CFG work needed —

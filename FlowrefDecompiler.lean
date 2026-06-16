@@ -244,6 +244,11 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
       verCount := verCount.insert r (v+1)
 
   let mut useToVer : Std.HashMap Nat (List (String × String)) := {}  -- use-idx → [(reg, ssaName)]
+  -- Multi-def uses carry the actual reaching def indices too. `useToVer` keeps a
+  -- conservative local name so unsafe output still compiles; the faithful diamond
+  -- bridge later rewrites such φ uses to an explicit ternary only when the CFG
+  -- shape proves which def belongs to taken vs fallthrough.
+  let mut useToPhiDefs : Std.HashMap Nat (List (String × List Nat)) := {}
   let mut trace : Array TraceEntry := #[]
   for j in [0:nI] do
     let usedRegs := readsRegs a insns[j]!
@@ -262,14 +267,28 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
         --     program order is the reaching order).
         -- (b) Otherwise the value is live-on-entry: under SysV an in-range arg
         --     register binds to its parameter name `a{k}` (a def-at-entry).
-        match (if nB == 1 then (defSites.filter (fun p => canonReg p.2 == canonReg r ∧ p.1 < j)).back? else none) with
+        let canonDefsBefore := defSites.filter (fun p =>
+          canonReg p.2 == canonReg r ∧ p.1 < j ∧
+            (idx2blk[p.1]! == idx2blk[j]! ∨ reaches idx2blk[p.1]! idx2blk[j]!))
+        match (if nB == 1 then canonDefsBefore.back? else none) with
         | some (di, _) =>
           let nm := cName ((ssaName.get? di).getD r)
           useToVer := useToVer.insert j (((useToVer.get? j).getD []) ++ [(r, nm)])
         | none =>
-          match sysvParamForReg pm.count r with
-          | some nm => useToVer := useToVer.insert j (((useToVer.get? j).getD []) ++ [(r, nm)])
-          | none    => pure ()  -- genuine unknown source: leave as `r` (a local).
+          if nB != 1 ∧ ¬ canonDefsBefore.isEmpty then
+            let defs := canonDefsBefore.toList.map (·.1)
+            match defs with
+            | [only] =>
+              let nm := cName ((ssaName.get? only).getD r)
+              useToVer := useToVer.insert j (((useToVer.get? j).getD []) ++ [(r, nm)])
+            | _ =>
+              let baseLocal := cName (r ++ "_phi")
+              useToVer := useToVer.insert j (((useToVer.get? j).getD []) ++ [(r, baseLocal)])
+              useToPhiDefs := useToPhiDefs.insert j (((useToPhiDefs.get? j).getD []) ++ [(r, defs)])
+          else
+            match sysvParamForReg pm.count r with
+            | some nm => useToVer := useToVer.insert j (((useToVer.get? j).getD []) ++ [(r, nm)])
+            | none    => pure ()  -- genuine unknown source: leave as `r` (a local).
       | [only] =>
         let nm := cName ((ssaName.get? only).getD r)
         useToVer := useToVer.insert j (((useToVer.get? j).getD []) ++ [(r, nm)])
@@ -278,7 +297,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
         -- current value (no φ in the emitted C — see the module docs).
         let baseLocal := cName (r ++ "_phi")
         useToVer := useToVer.insert j (((useToVer.get? j).getD []) ++ [(r, baseLocal)])
-        let _ := many
+        useToPhiDefs := useToPhiDefs.insert j (((useToPhiDefs.get? j).getD []) ++ [(r, many)])
         pure ()
 
   -- ===== Pass 4: control-flow structuring — PLAUSIBLE-DRIVEN =====
@@ -405,6 +424,18 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     for j in [0:nI] do
       for (_, nm) in (useToVer.get? j).getD [] do
         m := m.insert nm (j :: (m.get? nm).getD [])
+      -- A φ use consumes each candidate reaching def at the merge instruction,
+      -- even if the final C substitutes the opaque `r_phi` local with a ternary.
+      -- Keep those defs in top-level scope when their definitions live in branch
+      -- arms; otherwise a selected value can be declared inside an `if` and then
+      -- referenced after the merge.
+      for (_, defs) in (useToPhiDefs.get? j).getD [] do
+        for di in defs do
+          match ssaName.get? di with
+          | some nm =>
+            let cn := cName nm
+            m := m.insert cn (j :: (m.get? cn).getD [])
+          | none => pure ()
       -- a `ret` consumes the return register's reaching def (wired by `retName`).
       if (insns[j]!.mn.startsWith "ret" ∨ insns[j]!.mn == "blr") then
         let rn := retNameBase j
@@ -492,13 +523,13 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   --   Bret: ret
   -- This is the branch form of the already-proven `cmov` select class; the oracle
   -- still has final authority before the bench records it as EQUIVALENT.
-  let latestDefNameIn := fun (lo hi : Nat) =>
-    (defSites.filter (fun p => canonReg p.2 == canonReg retReg ∧ lo ≤ p.1 ∧ p.1 < hi)).back?.map
-      (fun (di, _) => cName ((ssaName.get? di).getD retReg))
-  let simpleDiamondRetExpr : Nat → Option String := fun (q : Nat) =>
+  let latestDefIn := fun (r : String) (lo hi : Nat) =>
+    (defSites.filter (fun p => canonReg p.2 == canonReg r ∧ lo ≤ p.1 ∧ p.1 < hi)).back?.map
+      (fun (di, _) => (di, cName ((ssaName.get? di).getD r)))
+  let simpleDiamondPhiExpr : Nat → String → List Nat → Option String := fun (q : Nat) (r : String) (defs : List Nat) =>
     if a == .x86 ∧ nB == 3 ∧ condBlocks.length == 1 then
       let cb := condBlocks.headD 0
-      let rb := idx2blk[q]!
+      let mb := idx2blk[q]!
       let cbb := blocks[cb]!
       match condTgtBlk cb with
       | some takenB =>
@@ -506,14 +537,37 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
         match fallB with
         | some fb =>
           let fbb := blocks[fb]!
-          if takenB == rb ∧ fbb.succ == [rb] then
-            match latestDefNameIn cbb.lo (cbb.hi - 1), latestDefNameIn fbb.lo fbb.hi with
-            | some takenV, some fallV => some s!"(({predOf cb}) ? ({takenV}) : ({fallV}))"
+          if takenB == mb ∧ fbb.succ == [mb] then
+            match latestDefIn r cbb.lo (cbb.hi - 1), latestDefIn r fbb.lo fbb.hi with
+            | some (takenDi, takenV), some (fallDi, fallV) =>
+              if (defs.isEmpty ∨ (defs.contains takenDi ∧ defs.contains fallDi)) then
+                some s!"(({predOf cb}) ? ({takenV}) : ({fallV}))"
+              else none
             | _, _ => none
           else none
         | none => none
       | none => none
     else none
+  let simpleDiamondRetExpr : Nat → Option String := fun (q : Nat) =>
+    (simpleDiamondPhiExpr q retReg []).orElse (fun _ =>
+      if a == .x86 ∧ nB == 3 ∧ condBlocks.length == 1 then
+        let cb := condBlocks.headD 0
+        let rb := idx2blk[q]!
+        let cbb := blocks[cb]!
+        match condTgtBlk cb with
+        | some takenB =>
+          let fallB := cbb.succ.find? (fun s => s != takenB)
+          match fallB with
+          | some fb =>
+            let fbb := blocks[fb]!
+            if takenB == rb ∧ fbb.succ == [rb] then
+              match latestDefIn retReg cbb.lo (cbb.hi - 1), latestDefIn retReg fbb.lo fbb.hi with
+              | some (_, takenV), some (_, fallV) => some s!"(({predOf cb}) ? ({takenV}) : ({fallV}))"
+              | _, _ => none
+            else none
+          | none => none
+        | none => none
+      else none)
 
   let retName := fun (q : Nat) =>
     (simpleDiamondRetExpr q).getD (retNameBase q)
@@ -521,10 +575,13 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- One non-terminator instruction → its C statement (or `none` to omit).
   -- Substitute an operand token: pass literals through; map a register to its
   -- reaching-def SSA name (or its declared local).
-  let subOf := fun (subs : List (String × String)) (tok : String) =>
+  let subOf := fun (q : Nat) (subs : List (String × String)) (tok : String) =>
     let t := tok.trimAscii.toString
     if t.startsWith "0x" ∨ t.startsWith "-" ∨ (¬ t.isEmpty ∧ t.front.isDigit) then t
-    else (subs.lookup t).getD (cName t)
+    else
+      match ((useToPhiDefs.get? q).getD [] |>.lookup t).bind (fun defs => simpleDiamondPhiExpr q t defs) with
+      | some phi => phi
+      | none => (subs.lookup t).getD (cName t)
   -- C comparison operator for a conditional-move suffix, after `cmp X, Y`
   -- (flags = X − Y). `none` for an unmodelled condition.
   let cmovCondOp : String → Option String := fun mn =>
@@ -552,20 +609,20 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
       match (fk.ops.splitOn ",").map (·.trimAscii.toString) with
       | [x, y] =>
         if fk.mn == "cmp" then
-          some s!"{subOf csubs x} {op} {subOf csubs y}"
+          some s!"{subOf ck csubs x} {op} {subOf ck csubs y}"
         else if fk.mn == "test" then
           -- `test x, y` sets ZF = ((x & y) == 0); only the ZF conds (==/!=) are
           -- sound off it (it clears CF, so </>= would be wrong).
           if op == "==" ∨ op == "!=" then
-            some s!"({subOf csubs x} & {subOf csubs y}) {op} 0"
+            some s!"({subOf ck csubs x} & {subOf ck csubs y}) {op} 0"
           else none
         else if op == "<" ∨ op == ">=" then
           -- CF off add/sub. `x` is the destination; its reaching read (old value)
           -- is in `csubs`; the add's result is the SSA def at `ck`.
           let resultSSA := cName ((ssaName.get? ck).getD x)
-          let xOld := subOf csubs x
+          let xOld := subOf ck csubs x
           if fk.mn == "add" then some s!"{resultSSA} {op} {xOld}"
-          else some s!"{xOld} {op} {subOf csubs y}"
+          else some s!"{xOld} {op} {subOf ck csubs y}"
         else none
       | _ => none
     | none => none
@@ -573,7 +630,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   let cmovRhs : Nat → Ins → List (String × String) → Option String := fun q ins subs =>
     match cmovCondOp ins.mn, (ins.ops.splitOn ",").map (·.trimAscii.toString) with
     | some op, [dst, src] =>
-      (condFromFlags q op).map (fun c => s!"({c}) ? ({subOf subs src}) : ({subOf subs dst})")
+      (condFromFlags q op).map (fun c => s!"({c}) ? ({subOf q subs src}) : ({subOf q subs dst})")
     | _, _ => none
   -- C comparison operator for a `setcc` suffix (same flag semantics as `cmovcc`).
   let setCondOp : String → Option String := fun mn =>
@@ -601,7 +658,11 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
       | some r =>
         let nm := cName ((ssaName.get? q).getD r)
         if okLocal nm then
-          let subs := (useToVer.get? q).getD []
+          let subs0 := (useToVer.get? q).getD []
+          let subs := subs0.map (fun (rr, nm) =>
+            match ((useToPhiDefs.get? q).getD [] |>.lookup rr).bind (fun defs => simpleDiamondPhiExpr q rr defs) with
+            | some phi => (rr, phi)
+            | none => (rr, nm))
           let rhs := if ins.mn.startsWith "cmov" then (cmovRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
                      else if ins.mn.startsWith "set" then (setccRhs q ins).getD (applyCdecl (renderExprC a ins subs))
                      else applyCdecl (renderExprC a ins subs)
@@ -755,13 +816,18 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   let allModeled := a != .x86 ∨
     (insns.all (fun i => modeledX86 i.mn) ∧ cmovsModeled ∧ setccModeled)
   -- First faithful multi-block bridge: a 3-block branch diamond whose only
-  -- control-flow effect is selecting the returned register value.  Conditional
-  -- branch mnemonics are allowed here only because `simpleDiamondRetExpr` lowers
-  -- the merge to an explicit ternary and the oracle checks the whole function.
+  -- control-flow effect is selecting a value.  The original case selected the
+  -- returned register directly; the φ case selects a non-return register at the
+  -- reconverged merge and then uses it in modeled straight-line code. Conditional
+  -- branch mnemonics are allowed here only because the diamond helpers lower each
+  -- merge use to an explicit ternary and the oracle checks the whole function.
   let branchSelectFaithful := a == .x86 ∧ ¬ hasCall ∧ ¬ hasMemOp ∧
     (insns.all (fun i => modeledX86 i.mn ∨ (cbtX i).isSome)) ∧ cmovsModeled ∧ setccModeled ∧
-    (Array.range nI).any (fun q =>
-      (insns[q]!.mn.startsWith "ret" ∨ insns[q]!.mn == "blr") ∧ (simpleDiamondRetExpr q).isSome)
+    ((Array.range nI).any (fun q =>
+      (insns[q]!.mn.startsWith "ret" ∨ insns[q]!.mn == "blr") ∧ (simpleDiamondRetExpr q).isSome) ∨
+     (Array.range nI).any (fun q =>
+      let phis := (useToPhiDefs.get? q).getD []
+      ¬ phis.isEmpty ∧ phis.all (fun (r, defs) => (simpleDiamondPhiExpr q r defs).isSome)))
   let faithful := (nB == 1 ∧ ¬ hasCall ∧ ¬ hasMemOp ∧ allModeled) ∨ branchSelectFaithful
   let mut out : String := cPreamble
   out := out ++ s!"\n/* flowref decompile @ 0x{hex fnVa} — {nI} insns, {nB} blocks, {defSites.size} SSA defs\n"
