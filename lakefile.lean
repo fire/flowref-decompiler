@@ -23,6 +23,12 @@ require «flowref» from git
 require lean_duckdb from git
   "https://github.com/v-sekai-multiplayer-fabric/lean-duckdb" @ "main"
 
+-- Slang AST + emitter + BitVec semantics (`LeanSlang.evalU32`). The decompiler's
+-- IL (`FlowrefDecompiler.IL`) renders to `LeanSlang.SlangExpr` and proves the
+-- render preserves meaning against that semantics — no compile/run oracle.
+require LeanSlang from git
+  "https://github.com/V-Sekai-fire/lean-slang" @ "main"
+
 @[default_target] lean_lib FlowrefDecompiler where
   -- pick up FlowrefDecompiler.lean and every FlowrefDecompiler/*.lean submodule.
   globs := #[.one `FlowrefDecompiler, .submodules `FlowrefDecompiler]
