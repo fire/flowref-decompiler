@@ -46,20 +46,27 @@ flowref demo basic --emit-c | gcc -xc -std=c11 -w -fsyntax-only -   # I1: compil
 ./decompile-bench/algo-bench.sh                                     # I0: SOUNDNESS 0 violations
 ```
 
-`algo-bench.sh` runs flowref over our own textbook algorithms (`algorithms.c`) and the
-oracle per function; it **exits non-zero if any strict lift is `NOT-EQUIVALENT`** — that
-is the soundness tripwire. (Current: 5/19 strict-proven EQUIVALENT, 0 violations.)
+`algo-bench.sh` runs flowref over our own textbook algorithms (one function per file under
+`decompile-bench/algorithms/`) and the oracle per function; it **exits non-zero if any
+strict lift is `NOT-EQUIVALENT`** — that is the soundness tripwire. (Current: 11/24
+strict-proven EQUIVALENT, 0 violations.)
 
 ## Invariants (never let a refactor break these)
 
 - **I0 — faithful-or-refuse (THE product integrity invariant).** Strict mode emits C
   **only** for the modeled class — one basic block, no call, no memory operand, and
-  every instruction in the emitter's modeled set (the gate also models `cmp`+`cmovcc`
-  as a `(X op Y) ? src : dst` ternary). Any unmodeled instruction ⇒ **refuse** (hard
-  error, nothing on stdout). Widen the gate ONLY after the oracle proves the new lift
-  `EQUIVALENT`. *Lesson: a `cmp+cmov` leaf once passed the structural checks and was
-  silently mis-lifted to wrong C under a "faithful" banner — the gate must whitelist
-  modeled mnemonics, not assume unknown ones are no-ops. `algo-bench.sh` guards this.*
+  every instruction in the emitter's modeled set: `mov/lea/add/sub/and/or/xor/shl/shr/
+  sar/imul/inc/dec/neg/not/movzx/movsx` register ops, plus up to **two** `cmp`+`cmovcc`
+  value-selects lowered to a `(X op Y) ? src : dst` ternary. Any unmodeled instruction
+  ⇒ **refuse** (hard error, nothing on stdout). Widen the gate ONLY after the oracle
+  proves the new lift `EQUIVALENT`. *Two soundness lessons, both caught by `algo-bench.sh`:
+  (1) a `cmp+cmov` leaf once passed the structural checks and was silently mis-lifted —
+  the gate must whitelist modeled mnemonics, never assume an unknown one is a no-op.
+  (2) `neg`/`not` and multi-cmov broke because the SHARED disassembler's `writesReg`
+  omits neg/not/cmov, so they were not reaching-def candidates yet correctly CLOBBER the
+  register on the path — reads after them resolved to a version-less local. Fixed by the
+  cmov/neg/not-aware `writesRegX` + a single-block reaching-def that falls back to the
+  latest `writesRegX` def before the use.*
 - **I1 — emitted C always compiles** as C11 (drop the un-lowerable to a comment, never
   to invalid syntax).
 - **I2 — the kernel is pure**: `Disasm`/`Dataflow`/`Emit` have no I/O and no Capstone
@@ -99,6 +106,25 @@ direction of travel:
   in-process** (`LeanSlang.spirvSize`); and `LeanSlang.SIMT` proves data-parallel kernel
   correctness = per-thread body (`evalU32`) ∘ race-free non-interference.
 
+### Speed direction (we have a 4090 — proof-carrying GPU performance)
+
+Most of tinygrad's speed playbook (https://docs.tinygrad.org/developer/speed/) targets a
+*high-level tensor scheduler* and does NOT apply to flowref-the-decompiler. The part that
+applies is the lean-slang → SPIR-V compute-kernel track, where the win is **proof-carrying
+autotuning**: the equivalence proof (`bv_decide` / SIMT) makes aggressive optimization
+*safe* — prove a family of kernel variants equivalent, then pick the fastest on the 4090.
+Concrete mapping of the doc's techniques to our track:
+- **In-process compile (TinyJIT/launch-overhead analogue)** — *already done*: libslang FFI
+  removed the `slangc` CLI fork; next is caching compiled SPIR-V by source hash.
+- **Kernel fusion** — extend `LeanSlang.SIMT` from a single-write per-thread body to
+  multi-write / reduction bodies (associativity+commutativity obligations); the fused body
+  is still `evalU32`-provable per thread, so fusion stays inside the proof.
+- **BEAM / autotuning** — pick among proven-equivalent kernels; the oracle (`flowref-equiv`)
+  or `bv_decide` is the correctness guard, so a tuner can be arbitrarily aggressive.
+- **Arithmetic intensity / tensor cores / register use** — future; each needs its own
+  meaning-preserving rewrite lemma before it may be emitted (same I0 discipline: prove,
+  then widen). *Do not chase these until the multi-write SIMT body lands.*
+
 ## Accretion (valuable, but layered ON the slice — trim here first)
 
 - Iterative-deepening ladder + plausible **certification** (`certifyReaching`, `ladder`,
@@ -114,7 +140,8 @@ direction of travel:
 ## Known honest gaps (so "missing" isn't mistaken for "broken")
 
 - Strict equivalence is proven for the modeled class: straight-line register-only leaves
-  **with parameters** and **`cmp`+`cmov`** value-selects. Control flow / memory / calls in
+  **with parameters** (incl. `neg`/`not`) and up to two **`cmp`+`cmov`** value-selects.
+  Control flow / memory / calls in
   the **production** emitter are refused (correctly) — the IL/formal track models them but
   is not yet wired to production bytes end-to-end (the lifter consumes decoded `Ins`, not
   the live disassembler output).
