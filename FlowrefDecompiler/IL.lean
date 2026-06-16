@@ -272,13 +272,22 @@ now threads `(slots, mem)` state. The payoff is that `bv_decide` reasons about
 **aliasing** — proving `store_two` returns `a + b` requires knowing the two
 stored addresses `p` and `p+4` are distinct, which `bv_decide` decides. -/
 
-/-- A statement: bind a value into the next SSA slot, or store a value to memory. -/
+/-- A callee environment: a callee name + argument values denote a result word.
+A call to a known function is application of its (here uninterpreted) summary. -/
+abbrev CallEnv := String → List Word → Word
+
+/-- The default (trivial) call environment, used when a program makes no calls. -/
+def CallEnv.triv : CallEnv := fun _ _ => 0
+
+/-- A statement: bind a value into the next SSA slot, store a value to memory, or
+call a function (its result becomes the next SSA slot). -/
 inductive Stmt
   | bind  (rhs : Rhs)
   | store (addr val : Atom)
+  | call  (callee : String) (args : List Atom)
   deriving Repr, DecidableEq
 
-/-- A leaf function with mutable memory. -/
+/-- A leaf function with mutable memory (and possibly calls). -/
 structure SProg where
   stmts : List Stmt
   ret   : Atom
@@ -287,14 +296,16 @@ structure SProg where
 /-- Point update of a memory at one address. -/
 @[simp] def Mem.upd (mem : Mem) (addr val : Word) : Mem := fun x => if x = addr then val else mem x
 
-/-- Thread `(slots, mem)` through the statements, then read `ret`. -/
-@[simp] def sevalGo (args : List Word) (ret : Atom) : List Stmt → List Word → Mem → Word
+/-- Thread `(slots, mem)` through the statements under a call environment `ce`,
+then read `ret`. Calls evaluate their args and apply `ce`. -/
+@[simp] def sevalGo (ce : CallEnv) (args : List Word) (ret : Atom) : List Stmt → List Word → Mem → Word
   | [],                 slots, _   => ret.eval args slots
-  | .bind rhs  :: rest, slots, mem => sevalGo args ret rest (slots ++ [rhs.eval mem args slots]) mem
-  | .store a v :: rest, slots, mem => sevalGo args ret rest slots (mem.upd (a.eval args slots) (v.eval args slots))
+  | .bind rhs  :: rest, slots, mem => sevalGo ce args ret rest (slots ++ [rhs.eval mem args slots]) mem
+  | .store a v :: rest, slots, mem => sevalGo ce args ret rest slots (mem.upd (a.eval args slots) (v.eval args slots))
+  | .call f as :: rest, slots, mem => sevalGo ce args ret rest (slots ++ [ce f (as.map (·.eval args slots))]) mem
 
-@[simp] def SProg.eval (mem : Mem) (p : SProg) (args : List Word) : Word :=
-  sevalGo args p.ret p.stmts [] mem
+@[simp] def SProg.eval (mem : Mem) (p : SProg) (args : List Word) (ce : CallEnv := CallEnv.triv) : Word :=
+  sevalGo ce args p.ret p.stmts [] mem
 
 /-- `uint32_t store_two(uint32_t* p, uint32_t a, uint32_t b){ p[0]=a; p[1]=b;
     return p[0] + p[1]; }` — distinct addresses, so the result is `a + b`. -/
@@ -342,6 +353,7 @@ semantics. Slots become named locals `sᵢ`; stores become buffer assigns. -/
   | [] => []
   | .bind rhs  :: rest => .declare (.scalar .uint) (slotName k) (some rhs.toSlangS) :: srenderGo (k+1) rest
   | .store a v :: rest => .assign (.index (.var "mem") a.toSlangS) v.toSlangS :: srenderGo k rest
+  | .call f as :: rest => .declare (.scalar .uint) (slotName k) (some (.call f (as.map (·.toSlangS)))) :: srenderGo (k+1) rest
 
 /-- Memory-IL program → a Slang statement body ending in `return ret;`. -/
 @[simp] def SProg.render (p : SProg) : List SlangStmt :=
@@ -516,6 +528,27 @@ theorem clamp_min_render (mem : Mem) (p v : Word) :
              Mem.upd, List.getD_cons_zero, List.getD_cons_succ, List.nil_append, List.cons_append,
              reduceIte]
 
+/-! ### Calls in the unified IL: `Stmt.call` in `SProg`, proved for all callees.
+
+`Stmt.call` brings function calls into the same statement IL as memory, evaluated
+against a `CallEnv ce` threaded through `sevalGo`. Combined with memory/branches,
+this is what real call-using functions need. Here a call result is abstracted, so
+the proof holds for **all** callees. -/
+
+/-- `uint32_t f2(uint32_t x){ return f(x) + f(x); }` with `f` a called function. -/
+def callDouble : SProg :=
+  { stmts := [ .call "f" [arg 0], .call "f" [arg 0], .bind (.alu add (slot 0) (slot 1)) ]
+  , ret := slot 2 }
+
+/-- For **any** callee `ce`, `callDouble` computes `2·(ce "f" [x])` — calls now
+live in the same IL as memory, discharged by `bv_decide`. -/
+theorem callDouble_correct (ce : CallEnv) (mem : Mem) (x : Word) :
+    callDouble.eval mem [x] ce = 2 * ce "f" [x] := by
+  simp only [callDouble, SProg.eval, sevalGo, Rhs.eval, Atom.eval, Op.apply,
+             List.map_cons, List.map_nil, List.getD_cons_zero, List.getD_cons_succ,
+             List.nil_append, List.cons_append]
+  bv_decide
+
 /-! ## Function calls: the ~87% unlock, callee as an uninterpreted summary.
 
 The corpus measurement found ~87% of real functions *call* another — the single
@@ -526,10 +559,8 @@ loads, so a function that calls and combines results is still provable for **all
 possible callees. (Render to Slang `call` needs a function env in lean-slang's
 evaluator — a signature change there — so it is the next increment.) -/
 
-/-- A callee environment: a callee name + arguments denote a result word. -/
-abbrev CallEnv := String → List Word → Word
-
-/-- A call-extended binding RHS: an ALU op, or a call to a named callee. -/
+/-- A call-extended binding RHS: an ALU op, or a call to a named callee.
+(`CallEnv` is defined earlier, now shared with the `SProg` statement IL.) -/
 inductive CRhs
   | alu  (op : Op) (a b : Atom)
   | call (callee : String) (args : List Atom)
