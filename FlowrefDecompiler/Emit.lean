@@ -31,7 +31,11 @@ faithfully-liftable subset the oracle reports `INCOMPARABLE` rather than assert 
 false equivalence — it never passes off non-equivalent output as correct.
 -/
 
-namespace Flowref
+-- The disassembler kernel lives in the `Flowref` namespace (fire/flowref dep);
+-- open it so the emitter can reference those names unqualified.
+open Flowref
+
+namespace FlowrefDecompiler
 
 /-- Map an x86/ppc register name to a C width type. Default `uint32_t`. -/
 def regCType (r : String) : String :=
@@ -146,4 +150,4 @@ def wholeWordIn (body name : String) : Bool := Id.run do
 def cPreamble : String :=
   "#include <stdint.h>\n#include <stddef.h>\n"
 
-end Flowref
+end FlowrefDecompiler

@@ -11,7 +11,7 @@ if [ -d /home/linuxbrew/.linuxbrew/bin ]; then
 fi
 
 GCC="${GCC:-gcc}"
-BIN=".lake/build/bin/flowref"
+BIN=".lake/build/bin/flowref-decompiler"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "ok: $*"; }
 

@@ -63,7 +63,7 @@ def main (argv : List String) : IO Unit := do
       IO.println "INCOMPARABLE  (could not map reference bytes)"; IO.Process.exit 3
     -- 2. Candidate = flowref's lift of the SAME region; refused ⇒ INCOMPARABLE.
     let hexName := s!"sub_{Flowref.hex fnVa}"
-    let flowref := (← IO.getEnv "FLOWREF").getD ".lake/build/bin/flowref"
+    let flowref := (← IO.getEnv "FLOWREF").getD ".lake/build/bin/flowref-decompiler"
     let lifted ← IO.Process.output { cmd := flowref, args := #["decompile", bin, arch, fnS, foS, vaS, lenS] }
     if lifted.exitCode != 0 then
       IO.println "INCOMPARABLE  (candidate not faithfully liftable)"; IO.Process.exit 3

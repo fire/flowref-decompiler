@@ -12,7 +12,7 @@
 #   equiv.sh <binary> <arch> <fnVaddrHex> <fileOffHex> <vaddrHex> <lenHex>
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-export FLOWREF="${FLOWREF:-$here/../.lake/build/bin/flowref}"
+export FLOWREF="${FLOWREF:-$here/../.lake/build/bin/flowref-decompiler}"
 EQUIV="${FLOWREF_EQUIV:-$here/../.lake/build/bin/flowref-equiv}"
 
 [ $# -eq 6 ] || { echo "usage: equiv.sh <binary> <arch> <fnVaddrHex> <fileOffHex> <vaddrHex> <lenHex>" >&2; exit 2; }

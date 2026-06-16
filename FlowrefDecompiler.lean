@@ -1,10 +1,13 @@
+-- Disassembler modules come from the `fire/flowref` Lake dependency.
 import Flowref.Disasm
 import Flowref.Dataflow
-import Flowref.Emit
 import Flowref.Ports
 import Flowref.Decoders
 import Flowref.Adapters
 import Flowref.Toc
+-- Decompiler-specific modules, local to this package.
+import FlowrefDecompiler.Emit
+import FlowrefDecompiler.Params
 import Plausible
 import Lean.Data.Json
 
@@ -25,7 +28,9 @@ The emitter (`Flowref/Emit.lean`) lowers the recovered facts into C that
 `gcc -fsyntax-only -std=c11 -w` accepts.
 -/
 
-open Plausible Flowref
+-- `Flowref` = disassembler kernel (fire/flowref dep); `FlowrefDecompiler` = the
+-- emitter + calling-convention model defined in this package.
+open Plausible Flowref FlowrefDecompiler
 open Lean (Json toJson)
 
 /-- Version string. -/

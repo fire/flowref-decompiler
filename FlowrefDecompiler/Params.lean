@@ -1,5 +1,6 @@
 import Flowref.Disasm
 import Flowref.Dataflow
+import Flowref.Params -- `Bits` decode-width tag, from the fire/flowref dependency
 import Plausible
 
 /-! # flowref — calling-convention parameter model
@@ -62,12 +63,14 @@ witness.
 -/
 
 open Plausible
+-- Disassembler kernel names (`Bits`, `Ins`, reaching-def search, …) live in the
+-- `Flowref` namespace (fire/flowref dep); open it so they resolve unqualified.
+open Flowref
 
-namespace Flowref
+namespace FlowrefDecompiler
 
-/-- The decode width / bitness, threaded from the decoder (which alone knows
-whether Capstone ran in 32- or 64-bit mode) into the parameter model. -/
-inductive Bits | b32 | b64 deriving DecidableEq, Repr, Inhabited
+-- `Bits` (the 32-/64-bit decode-width tag) is provided by `Flowref.Params` in
+-- the fire/flowref dependency; the parameter model below builds on it.
 
 /-- A calling convention. -/
 inductive Conv | sysv | cdecl | unknown deriving DecidableEq, Repr, Inhabited
@@ -206,4 +209,4 @@ def cdeclParamForSlot (count : Nat) (base : String) (disp : Int) : Option String
     if disp == want then return some s!"a{k}"
   pure none
 
-end Flowref
+end FlowrefDecompiler

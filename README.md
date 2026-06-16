@@ -80,21 +80,30 @@ exit=5
   [`plausible`](https://github.com/leanprover-community/plausible), deepened
   on demand into a witness DAG. The `if`/`while` structure is rendered from
   those same witnesses.
-- **Hexagonal.** A pure kernel (`Disasm`/`Dataflow`/`Emit`) speaks only an
-  instruction model; adapters feed it from ELF, raw bytes, or an asm listing.
-  Decoding covers every Capstone target; data-flow patterns are x86 + PowerPC.
+- **Hexagonal.** A pure kernel speaks only an instruction model; adapters feed
+  it from ELF, raw bytes, or an asm listing. The disassembler half
+  (`Flowref.Disasm`/`Dataflow` + the ELF/Capstone adapters) lives in the
+  [`fire/flowref`](https://github.com/fire/flowref) package, consumed here as a
+  Lake dependency; this repo adds the decompiler (`FlowrefDecompiler.Emit`, the
+  `FlowrefDecompiler.Params` calling-convention model, and the equivalence
+  oracle). Decoding covers every Capstone target; data-flow patterns are x86 +
+  PowerPC.
 
 ## Build & test
 
 ```bash
-lake update
+lake update                                                 # fetches fire/flowref + transitive deps
 .lake/packages/lean-capstone/thirdparty/capstone/build.sh   # build libcapstone.a once (slow)
 lake build
 ./run-tests.sh                                              # builds, runs demos, gcc-checks the C
 ```
 
-ELF parsing is a self-contained `<elf.h>` shim (`ffi/elf_shim.c`) — no external
-library to install.
+`lake build` produces `.lake/build/bin/flowref-decompiler` (the CLI shown above)
+plus `flowref-equiv` (the oracle) and `flowref-etnf` (the corpus normaliser).
+
+ELF parsing is a self-contained `<elf.h>` shim — no external library to install —
+and now ships inside the [`fire/flowref`](https://github.com/fire/flowref)
+dependency rather than this repo.
 
 ## Limitations
 
