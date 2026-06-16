@@ -119,11 +119,52 @@ def insToS (i : Ins) : Option (List SInsn) :=
     | _, _, _ => none
   | _, _ => none
 
+/-! ### Flags model: fuse `cmp` + `cmovcc` into the existing `ult` + `sel`.
+
+A conditional move is two instructions: `cmp a, b` sets the flags, then
+`cmovcc dst, src` reads them. That's stateful, so it can't be lowered one
+instruction at a time. `fuse` carries the last `cmp`'s operands and, on a
+`cmovcc`, emits the comparison into a scratch (`ult`) followed by a `sel` —
+the branchless conditional the IL already proves. No IL change. -/
+
+/-- The two operand tokens of a `cmp a, b`. -/
+def cmpOps (i : Ins) : Option (String × String) :=
+  match (i.ops.splitOn ",").map (·.trimAscii.toString) with
+  | [a, b] => some (a, b)
+  | _      => none
+
+/-- Lower `cmovcc dst, src` given the preceding `cmp`'s operands `(c1, c2)`:
+`__cc := (c1 < c2)`, then `dst := cc ? … : …` with the arms ordered per the
+condition code. Unsigned below/above-equal only (enough for min/max). -/
+def lowerCmov (mn dst src : String) (c : String × String) : Option (List SInsn) :=
+  let c1 := tokToOperand c.1; let c2 := tokToOperand c.2
+  let d  := canonReg dst;      let s := tokToOperand src
+  if mn == "cmovb" then            -- dst = (c1 < c2) ? src : dst
+    some [ .bin "__cc" .ult c1 c2, .csel d (.reg "__cc") s (.reg d) ]
+  else if mn == "cmovae" then      -- dst = (c1 >= c2) ? src : dst = (c1<c2)? dst : src
+    some [ .bin "__cc" .ult c1 c2, .csel d (.reg "__cc") (.reg d) s ]
+  else none
+
+/-- Lower an instruction list to `SInsn`, threading the last `cmp`'s operands so
+`cmovcc` can be fused. Refuses (`none`) on an unmodelled instruction or a
+`cmovcc` with no preceding `cmp`. -/
+def fuse (cmp : Option (String × String)) : List Ins → Option (List SInsn)
+  | []        => some []
+  | i :: rest =>
+    if i.mn == "cmp" then
+      (cmpOps i).bind (fun ab => fuse (some ab) rest)
+    else if i.mn.startsWith "cmov" then
+      match cmp, (i.ops.splitOn ",").map (·.trimAscii.toString) with
+      | some ab, [d, s] => (lowerCmov i.mn d s ab).bind (fun pre => (fuse none rest).map (pre ++ ·))
+      | _, _ => none
+    else
+      (insToS i).bind (fun ss => (fuse none rest).map (ss ++ ·))
+
 /-- Lift a whole decoded function region to an IL `SProg`, or refuse if any
 instruction is outside the modelled subset. `argRegs` seeds the calling
-convention (SysV: `rdi, rsi, …`). -/
+convention (SysV: `rdi, rsi, …`). `cmp`/`cmovcc` are fused by `fuse`. -/
 def liftFn (argRegs : List String) (is : List Ins) : Option SProg :=
-  (is.mapM insToS).map (fun lss => liftS argRegs lss.flatten)
+  (fuse none is).map (liftS argRegs)
 
 /-! ## Proof: the real decoded form of `BlockDevice::Lock()` lifts and is correct.
 
@@ -214,5 +255,35 @@ theorem liftFn_succ_correct (mem : Mem) (x : Word) :
   rw [liftFn_succ_shape]
   simp only [Option.map_some, SProg.eval, sevalGo, Rhs.eval, Atom.eval, Op.apply,
              List.getD_cons_zero, List.nil_append]
+
+/-! ## Conditional move: `cmp` + `cmovb` fused to `ult` + `sel`, lifted and proved.
+
+`umax(a,b){ return a<b ? b : a; }` compiles to `mov eax,edi; cmp edi,esi;
+cmovb eax,esi; ret`. The flags pass fuses the `cmp`+`cmovb` into `ult`+`sel`. -/
+
+/-- `umax` as `cmp`+`cmovb` (the cmov leaf the soundness gate now refuses until
+the lifter models it). -/
+def umaxIns : List Ins :=
+  [ { addr := 0x5000, mn := "mov",   ops := "eax, edi" },
+    { addr := 0x5002, mn := "cmp",   ops := "edi, esi" },
+    { addr := 0x5004, mn := "cmovb", ops := "eax, esi" },
+    { addr := 0x5007, mn := "ret",   ops := "" } ]
+
+/-- The fused lift is `s0 := (a<b); s1 := s0 ? b : a; return s1`. -/
+theorem liftFn_umax_shape :
+    liftFn ["rdi", "rsi"] umaxIns
+      = some { stmts := [.bind (.alu .ult (.arg 0) (.arg 1)),
+                         .bind (.sel (.slot 0) (.arg 1) (.arg 0))], ret := .slot 1 } := by
+  native_decide
+
+/-- Hence the lifted cmov computes the max — an upper bound of both operands, for
+**all** inputs, by `bv_decide`. (cmov leaf now lifts correctly via the flags model.) -/
+theorem liftFn_umax_is_ub (mem : Mem) (a b : Word) {p : SProg}
+    (h : liftFn ["rdi", "rsi"] umaxIns = some p) :
+    ¬ (p.eval mem [a, b]).ult a ∧ ¬ (p.eval mem [a, b]).ult b := by
+  rw [liftFn_umax_shape] at h; injection h with h; subst h
+  simp only [SProg.eval, sevalGo, Rhs.eval, Atom.eval, Op.apply,
+             List.getD_cons_zero, List.getD_cons_succ, List.nil_append, List.cons_append]
+  bv_decide
 
 end FlowrefDecompiler.Lift
