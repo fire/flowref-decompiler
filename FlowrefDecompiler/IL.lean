@@ -568,4 +568,28 @@ theorem double_call_correct (ce : CallEnv) (x : Word) :
              List.nil_append, List.cons_append]
   bv_decide
 
+/-! ### Compositional calls: a concrete callee proven end to end.
+
+`double_call_correct` abstracts the callee. Here we instead supply a *specific*
+callee — its own IL program — and thread its denotation in as the `CallEnv`, so
+the whole composition closes to a concrete form. This is the whole-program step:
+caller + callee proven together, not the caller alone. -/
+
+/-- The callee `uint32_t f(uint32_t z){ return z + z; }`, as its own IL program. -/
+def f_double : CProg := { binds := [ .alu add (arg 0) (arg 0) ], ret := slot 0 }
+
+/-- A call environment in which `"f"` is `f_double` (which itself calls nothing,
+so its inner environment is irrelevant). -/
+def withF : CallEnv := fun name args =>
+  if name = "f" then f_double.eval (fun _ _ => 0) args else 0
+
+/-- With the concrete callee `f(z) = 2z`, `double_call` computes `4·x` for **all**
+`x` — caller and callee composed and proved to a closed form by `bv_decide`. -/
+theorem double_call_with_f (x : Word) :
+    double_call.eval withF [x] = 4 * x := by
+  simp only [double_call, withF, f_double, CProg.eval, cevalGo, CRhs.eval, Atom.eval, Op.apply,
+             List.map_cons, List.map_nil, List.getD_cons_zero, List.getD_cons_succ,
+             List.nil_append, List.cons_append, reduceIte]
+  bv_decide
+
 end FlowrefDecompiler.IL
