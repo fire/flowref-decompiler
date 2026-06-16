@@ -592,4 +592,33 @@ theorem double_call_with_f (x : Word) :
              List.nil_append, List.cons_append, reduceIte]
   bv_decide
 
+/-! ### Rendering calls to Slang, proved against `evalU32F`.
+
+A call renders to a Slang `call` expression; ALU/slots render as before. The
+render is proved meaning-preserving against `LeanSlang.evalU32F` — the
+call-aware semantics — with the callee left abstract. -/
+
+/-- Lower a call-binding RHS: ALU → `bin`, call → a Slang `call` expression. -/
+@[simp] def CRhs.toSlang (slots : List SlangExpr) : CRhs → SlangExpr
+  | .alu op a b => .bin op.slangOp (a.toSlang slots) (b.toSlang slots)
+  | .call f as  => .call f (as.map (·.toSlang slots))
+
+/-- Inline the SSA slots left-to-right, then render the returned atom. -/
+@[simp] def crenderGo (ret : Atom) : List CRhs → List SlangExpr → SlangExpr
+  | [],      slots => ret.toSlang slots
+  | r :: rs, slots => crenderGo ret rs (slots ++ [r.toSlang slots])
+
+/-- Call-IL program → one `LeanSlang.SlangExpr` (calls become Slang `call`s). -/
+@[simp] def CProg.render (p : CProg) : SlangExpr := crenderGo p.ret p.binds []
+
+/-- render-correctness for calls: the emitted Slang `call` expression means
+exactly `double_call.eval`, for **all** callees (the `CallEnv` is reused as the
+Slang `FEnv`). -/
+theorem double_call_render (ce : CallEnv) (x : Word) :
+    (double_call.render).evalU32F (env2 x 0) ce = some (double_call.eval ce [x]) := by
+  simp +decide only [double_call, CProg.render, crenderGo, CRhs.toSlang, Atom.toSlang, Op.slangOp,
+             argName, env2, SlangExpr.evalU32F, binOpU32, CProg.eval, cevalGo, CRhs.eval, Atom.eval,
+             Op.apply, List.map_cons, List.map_nil, List.getD_cons_zero, List.getD_cons_succ,
+             List.nil_append, List.cons_append, if_true, if_false]
+
 end FlowrefDecompiler.IL
