@@ -516,4 +516,56 @@ theorem clamp_min_render (mem : Mem) (p v : Word) :
              Mem.upd, List.getD_cons_zero, List.getD_cons_succ, List.nil_append, List.cons_append,
              reduceIte]
 
+/-! ## Function calls: the ~87% unlock, callee as an uninterpreted summary.
+
+The corpus measurement found ~87% of real functions *call* another — the single
+biggest gap. A call to a known callee is modelled here as application of an
+**uninterpreted summary** `ce : CallEnv` (callee name → denotation); `bv_decide`
+abstracts each `ce f args` as an opaque term, exactly as it did for memory
+loads, so a function that calls and combines results is still provable for **all**
+possible callees. (Render to Slang `call` needs a function env in lean-slang's
+evaluator — a signature change there — so it is the next increment.) -/
+
+/-- A callee environment: a callee name + arguments denote a result word. -/
+abbrev CallEnv := String → List Word → Word
+
+/-- A call-extended binding RHS: an ALU op, or a call to a named callee. -/
+inductive CRhs
+  | alu  (op : Op) (a b : Atom)
+  | call (callee : String) (args : List Atom)
+  deriving Repr
+
+/-- A leaf function that may call other functions. -/
+structure CProg where
+  binds : List CRhs
+  ret   : Atom
+  deriving Repr
+
+@[simp] def CRhs.eval (ce : CallEnv) (args slots : List Word) : CRhs → Word
+  | .alu op a b => op.apply (a.eval args slots) (b.eval args slots)
+  | .call f as  => ce f (as.map (·.eval args slots))
+
+@[simp] def cevalGo (ce : CallEnv) (args : List Word) (ret : Atom) : List CRhs → List Word → Word
+  | [],      slots => ret.eval args slots
+  | r :: rs, slots => cevalGo ce args ret rs (slots ++ [r.eval ce args slots])
+
+@[simp] def CProg.eval (ce : CallEnv) (p : CProg) (args : List Word) : Word :=
+  cevalGo ce args p.ret p.binds []
+
+/-- `uint32_t double_call(uint32_t x){ return f(x) + f(x); }`. -/
+def double_call : CProg :=
+  { binds := [ .call "f" [arg 0]                -- s0 = f(x)
+             , .call "f" [arg 0]                -- s1 = f(x)
+             , .alu add (slot 0) (slot 1) ]     -- s2 = s0 + s1
+  , ret := slot 2 }
+
+/-- For **any** callee `f`, `f(x) + f(x) = 2·f(x)` — the call result is abstracted
+as an opaque term by `bv_decide`, so the proof holds whatever `f` computes. -/
+theorem double_call_correct (ce : CallEnv) (x : Word) :
+    double_call.eval ce [x] = 2 * ce "f" [x] := by
+  simp only [double_call, CProg.eval, cevalGo, CRhs.eval, Atom.eval, Op.apply,
+             List.map_cons, List.map_nil, List.getD_cons_zero, List.getD_cons_succ,
+             List.nil_append, List.cons_append]
+  bv_decide
+
 end FlowrefDecompiler.IL
