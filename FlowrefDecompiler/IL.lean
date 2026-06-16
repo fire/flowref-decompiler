@@ -21,7 +21,7 @@ inductive Op | add | sub | mul | band | bor | bxor | shl | ult
 This is exactly the shape of the lifted C (`eax_1 = eax_0 + a1`): `arg` = a
 parameter, `slot` = a prior `eax_n`, `imm` = a literal. -/
 inductive Atom | arg (i : Nat) | slot (i : Nat) | imm (w : Word)
-  deriving Repr
+  deriving Repr, DecidableEq
 
 /-- One SSA binding: `slot_next := op a b`. -/
 structure Bind where
@@ -190,7 +190,7 @@ inductive Rhs
   | alu  (op : Op) (a b : Atom)
   | load (addr : Atom)
   | sel  (c x y : Atom)   -- branchless conditional move: `c ≠ 0 ? x : y`
-  deriving Repr
+  deriving Repr, DecidableEq
 
 /-- A leaf function with read-only memory. -/
 structure MProg where
@@ -276,13 +276,13 @@ stored addresses `p` and `p+4` are distinct, which `bv_decide` decides. -/
 inductive Stmt
   | bind  (rhs : Rhs)
   | store (addr val : Atom)
-  deriving Repr
+  deriving Repr, DecidableEq
 
 /-- A leaf function with mutable memory. -/
 structure SProg where
   stmts : List Stmt
   ret   : Atom
-  deriving Repr
+  deriving Repr, DecidableEq
 
 /-- Point update of a memory at one address. -/
 @[simp] def Mem.upd (mem : Mem) (addr val : Word) : Mem := fun x => if x = addr then val else mem x

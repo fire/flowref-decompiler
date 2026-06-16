@@ -68,11 +68,27 @@ def parseOpd (t0 : String) : Option Opd :=
     | some i => some (.imm (BitVec.ofInt 32 i))
     | none   => some (.reg (canonReg t))
 
+/-- Token → IL operand (immediate if numeric, else a canonicalised register). -/
+def tokToOperand (t : String) : Operand :=
+  match parseImm? t with
+  | some i => .imm (BitVec.ofInt 32 i)
+  | none   => .reg (canonReg t)
+
 /-- Lower a single decoded instruction to an `SInsn`, or refuse (`none`). -/
 def insToS (i : Ins) : Option SInsn :=
   let toks := (i.ops.splitOn ",").map (·.trimAscii.toString)
   match i.mn, toks with
   | "ret", _    => some (.ret "rax")                       -- x86-64 returns in rax
+  | "lea", [d, m] =>
+    -- `lea dst, [a + b]` is address arithmetic: dst := a + b (NOT a load).
+    match parseOpd d with
+    | some (.reg dr) =>
+      let inner := (((m.splitOn "[").getD 1 "").splitOn "]").headD "" |>.trimAscii.toString
+      match (inner.splitOn "+").map (·.trimAscii.toString) with
+      | [a, b] => some (.bin dr .add (tokToOperand a) (tokToOperand b))
+      | [a]    => some (.mov dr (tokToOperand a))
+      | _      => none
+    | _ => none
   | "mov", [d, s] =>
     match parseOpd d, parseOpd s with
     | some (.reg dr),    some (.reg sr)     => some (.mov dr (.reg sr))
@@ -110,5 +126,31 @@ returns `1` — the function's actual behaviour. -/
 theorem liftFn_lock :
     (liftFn [] lockIns).map (fun p => p.eval (fun _ => 0) []) = some 1 := by
   native_decide
+
+/-! ## A two-argument function via `lea`, lifted and proved for all inputs.
+
+`lea eax, [rdi + rsi]` is the canonical compilation of `a + b` (address
+arithmetic reused as integer add). The adapter lifts it; proving correctness for
+**symbolic** `a, b` is two steps: the lifted *shape* is a concrete fact
+(`native_decide`, now that the IL types derive `DecidableEq`), and that shape's
+denotation is closed by `bv_decide`. -/
+
+/-- `add(a,b)` compiled with `lea`: `lea eax, [rdi + rsi]; ret`. -/
+def addLeaIns : List Ins :=
+  [ { addr := 0x2000, mn := "lea", ops := "eax, [rdi + rsi]" },
+    { addr := 0x2004, mn := "ret", ops := "" } ]
+
+/-- The `lea` form lifts to the expected IL shape. -/
+theorem liftFn_addLea_shape :
+    liftFn ["rdi", "rsi"] addLeaIns
+      = some { stmts := [.bind (.alu .add (.arg 0) (.arg 1))], ret := .slot 0 } := by
+  native_decide
+
+/-- Hence the lifted `lea`-add computes `a + b` for **all** inputs. -/
+theorem liftFn_addLea_correct (mem : Mem) (a b : Word) :
+    (liftFn ["rdi", "rsi"] addLeaIns).map (fun p => p.eval mem [a, b]) = some (a + b) := by
+  rw [liftFn_addLea_shape]
+  simp only [Option.map_some, SProg.eval, sevalGo, Rhs.eval, Atom.eval, Op.apply,
+             List.getD_cons_zero, List.getD_cons_succ, List.nil_append]
 
 end FlowrefDecompiler.Lift
