@@ -52,13 +52,31 @@ the refusal removable, and the oracle signal that marks the gap closed.
    strict mode and returns `EQUIVALENT`; a broad transitive search without CFG
    witnesses is not sound enough for the faithful gate.
 
-4. Loop oracle proof. `sumLoop_snd_double` in `IL.lean` has a `sorry`
-   stub. The bilinear step `k * (2*i + k - 1)` over `BitVec 32` requires a
-   ring solver that `bv_omega` cannot handle. `grind` with a `CommRing BitVec
-   32` instance (Mathlib ≥ 4.26) or the lambdaclass e-graph approach
-   (`CITATIONS.bib: lambdaclass2026amolean`) closes it. This gap lives on the
-   formal proof track only; the runtime oracle still verifies emitted C
-   dynamically.
+4. Loop oracle proof. `sumLoop_snd_double` and `sumLoop_inv_double` in
+   `FlowrefDecompiler/IL.lean` have `sorry` stubs. The induction step for
+   `sumLoop_snd_double` is the first blocker: after `simp only [sumLoop]` and
+   `rw [ih]`, the goal contains the bilinear polynomial
+   `k * (2*i + k - 1)` over `BitVec 32`. `bv_omega` is linear, and
+   `bv_decide` abstracts the non-linear term too coarsely, so neither tactic is
+   the right backend.
+
+   The selected design is the Lean-native `grind` CommRing path, not the
+   lambdaclass e-graph integration. The repo already runs Lean 4.30, so the
+   smallest proof-maintenance path is to expose a Mathlib-compatible
+   `CommRing (BitVec 32)` instance to `IL.lean`, import the ring-normalizer
+   support, and replace the `sorry` in the successor branch with a local
+   polynomial-normalization step (`grind` after the induction hypothesis). The
+   lambdaclass e-graph remains useful prior art, but bringing in an optimizer
+   stack just for one modular arithmetic identity adds more surface area than
+   this proof needs.
+
+   The implementation shape is narrow: first add a tiny scratch theorem that
+   proves the post-`rw [ih]` polynomial identity over `BitVec 32` with `grind`,
+   then use that theorem in `sumLoop_snd_double`, then specialize it at
+   `(i, s) = (1, 0)` to discharge `sumLoop_inv_double`. The closure signal is
+   `lake build FlowrefDecompiler.IL` with no `sorry` warnings for those two
+   declarations and no change to the runtime oracle result; this remains a
+   formal proof-track gap only because emitted C is already checked dynamically.
 
 5. Variable coalescing. `eax_0`/`eax_1` SSA names are not collapsed into a
    single source-like local when live ranges do not overlap. Output is correct
