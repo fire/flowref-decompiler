@@ -824,4 +824,143 @@ theorem liftS_umax_is_ub (mem : Mem) (a b : Word) :
              List.getD_cons_zero, List.getD_cons_succ, List.nil_append, List.cons_append]
   bv_decide
 
+/-! ## Complete canonical IL skeleton — intentionally stubbed with `sorry`.
+
+The proven IL above is the sound core we actually rely on today. This namespace
+is the wider target shape requested for the tinygrad-style architecture: every
+Capstone adapter should lower into one explicit executable machine rather than
+growing per-architecture decompilers. It is deliberately broader than the current
+sound fragment and its theorems are marked with `sorry` until each semantic tier
+is tightened.
+-/
+
+namespace Complete
+
+/-- Machine value with an explicit bit width. Placeholder carrier for the complete
+IL; future work should replace `bits : Nat` with width-indexed `BitVec width`
+once proof obligations are split per width. -/
+structure Value where
+  width : Nat
+  bits  : Nat
+  deriving Repr, DecidableEq, Inhabited
+
+/-- Architectural register, flag, temporary, memory, and PC state. Byte-addressed
+memory is represented as 8-bit `Value`s so every ISA lowers to the same model. -/
+structure State where
+  regs  : String → Value
+  flags : String → Bool
+  tmps  : Nat → Value
+  mem   : Nat → Value
+  pc    : Nat
+  deriving Inhabited
+
+/-- Scalar operations the complete canonical machine intends to cover. -/
+inductive ScalarOp
+  | add | sub | mul | udiv | sdiv | urem | srem
+  | band | bor | bxor | bnot | shl | lshr | ashr | rotl | rotr
+  | eq | ne | ult | ule | ugt | uge | slt | sle | sgt | sge
+  | zext | sext | trunc | concat | extract
+  deriving Repr, DecidableEq
+
+/-- Atom references: ABI args, architectural registers, flags, SSA temporaries,
+the current PC, or a literal. -/
+inductive CAtom
+  | arg  (i : Nat)
+  | reg  (name : String)
+  | flag (name : String)
+  | tmp  (i : Nat)
+  | pc
+  | imm  (width bits : Nat)
+  deriving Repr, DecidableEq
+
+/-- Complete expressions: scalar ops, memory loads, conditionals, and explicit
+undefined/poison values for instructions whose source ISA semantics require it. -/
+inductive CExpr
+  | atom   (a : CAtom)
+  | scalar (op : ScalarOp) (xs : List CExpr)
+  | load   (width : Nat) (addr : CExpr)
+  | ite    (cond yes no : CExpr)
+  | poison (reason : String)
+  deriving Repr
+
+/-- Statement-level IL: assignments, stores, branches, calls, returns, traps,
+syscalls, and fences. This is meant to be large enough to encode all executable
+Capstone-decoded code after each architecture-specific adapter normalizes syntax,
+delay slots, register windows, stack machines, and ABI conventions. -/
+inductive CStmt
+  | assignReg  (name : String) (rhs : CExpr)
+  | assignFlag (name : String) (rhs : CExpr)
+  | assignTmp  (i : Nat) (rhs : CExpr)
+  | store      (addr val : CExpr)
+  | branch     (target : CExpr)
+  | cbranch    (cond target fallthrough : CExpr)
+  | call       (target : CExpr) (args : List CExpr) (rets : List String)
+  | ret        (vals : List CExpr)
+  | trap       (kind : String)
+  | syscall    (num : CExpr) (args : List CExpr)
+  | fence      (kind : String)
+  | nop
+  deriving Repr
+
+structure CProgram where
+  entry : Nat
+  body  : List CStmt
+  deriving Repr
+
+/-- Placeholder expression semantics for the complete IL. It is executable enough
+to typecheck downstream contracts, but it is not sound yet. -/
+def evalExpr (args : List Value) (s : State) : CExpr → Value
+  | .atom (.reg r)   => s.regs r
+  | .atom (.tmp i)   => s.tmps i
+  | .atom .pc        => { width := 64, bits := s.pc }
+  | .atom (.imm w b) => { width := w, bits := b }
+  | .atom (.arg i)   => args.getD i default
+  | .atom (.flag f)  => { width := 1, bits := if s.flags f then 1 else 0 }
+  | .load w _        => { width := w, bits := 0 }
+  | .ite _ y _       => evalExpr args s y
+  | .scalar _ _      => default
+  | .poison _        => default
+
+/-- Placeholder small-step semantics for the complete IL. It preserves enough
+shape for adapters to target it now; real semantics/proofs replace this stub. -/
+def step (args : List Value) (st : State) : CStmt → State
+  | .assignReg r e  => { st with regs := fun x => if x = r then evalExpr args st e else st.regs x }
+  | .assignFlag f e => { st with flags := fun x => if x = f then (evalExpr args st e).bits ≠ 0 else st.flags x }
+  | .assignTmp i e  => { st with tmps := fun x => if x = i then evalExpr args st e else st.tmps x }
+  | .store a v      => { st with mem := fun x => if x = (evalExpr args st a).bits then evalExpr args st v else st.mem x }
+  | .branch t       => { st with pc := (evalExpr args st t).bits }
+  | .cbranch c t f  => { st with pc := if (evalExpr args st c).bits ≠ 0 then (evalExpr args st t).bits else (evalExpr args st f).bits }
+  | .call _ _ _     => st
+  | .ret _          => st
+  | .trap _         => st
+  | .syscall _ _    => st
+  | .fence _        => st
+  | .nop            => st
+
+def run (args : List Value) : List CStmt → State → State
+  | [],      st => st
+  | x :: xs, st => run args xs (step args st x)
+
+/-- Target theorem: every Capstone architecture adapter should preserve the
+source instruction's executable semantics when lowered into `CProgram`. Stubbed
+now because architecture semantics are not formalized yet. -/
+theorem adapter_contract_sound_stub
+    (archName : String) (srcInsn : String) (lowered : CProgram) :
+    True := by
+  sorry
+
+/-- Target theorem: the complete IL should refine the currently proved `SProg`
+fragment when a program uses only bind/store/call/return constructs already in
+the sound core. Stubbed until we write the embedding and simulation relation. -/
+theorem complete_refines_sound_core_stub (p : SProg) : True := by
+  sorry
+
+/-- Target theorem: complete-IL rendering should preserve `run` semantics for the
+full statement language. Stubbed until the renderer grows complete control-flow,
+syscall, trap, and memory-event semantics. -/
+theorem complete_render_correct_stub (p : CProgram) : True := by
+  sorry
+
+end Complete
+
 end FlowrefDecompiler.IL

@@ -9,6 +9,7 @@ import Flowref.Toc
 import FlowrefDecompiler.Emit
 import FlowrefDecompiler.Params
 import FlowrefDecompiler.CanonicalMachine
+import FlowrefDecompiler.IL.SIMT
 import Plausible
 import Lean.Data.Json
 

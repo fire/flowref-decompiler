@@ -30,6 +30,18 @@ remaining value. Current order, highest first:
     same small IL: lower register, immediate, memory, branch, call, and ABI facts
     into the canonical machine instead of growing per-architecture decompilers.
 
+2b. **Discharge the complete-IL `sorry`s.** `FlowrefDecompiler.IL.Complete` now
+    names the full target machine shape (regs/flags/memory/PC, scalar ops,
+    branches, calls, traps, syscalls, fences), but its semantics and adapter/render
+    soundness theorems are stubs. Replace placeholder `Nat` bits with width-indexed
+    `BitVec`, then prove the embedding from the existing sound `SProg` fragment.
+
+2c. **Discharge the SIMT embedding `sorry`.** `FlowrefDecompiler/IL/SIMT.lean`
+    is the tinygrad-style minimal kernel core, separate from machine IL. Relate
+    `intrinsic "call:f"` to `CallEnv`, prove `fromSoundSProg` preserves existing
+    `SProg.eval`, then add backend renderers for `Special`, `barrier`, guarded
+    stores, and WMMA/intrinsics.
+
 3. **General calls (combine, not just forward).** ~87% of real functions call
    something. The IL proves `callDouble`; lift `call; <combine result with ALU>`
    from real multi-instruction sequences. The production emitter refuses calls.

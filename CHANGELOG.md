@@ -62,6 +62,16 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
   render-correctness to lean-slang semantics. Covers registers, loads, stores (with
   aliasing), select/cmov, branching `if` (terminal select), bounded + symbolic loops,
   and function calls (`Stmt.call`/`CallEnv`, proved for all callees).
+- `FlowrefDecompiler.IL.Complete` now stubs the intended complete canonical IL:
+  width-tagged values, architectural regs/flags/temps/memory/PC state, scalar ops,
+  expressions, stores, branches, calls, returns, traps, syscalls, and fences. Its
+  three target theorems are intentionally `sorry` placeholders; this is a shape
+  contract, not a soundness claim.
+- `FlowrefDecompiler/IL/SIMT.lean` adds a separate tinygrad-style minimal SIMT
+  core: launch dimensions, work-item `Special`s, address spaces, ALU/where/load,
+  structured ranges/if, guarded stores, barriers, pure intrinsics/WMMA hooks, and
+  an embedding from the existing sound `SProg` fragment. It intentionally omits
+  machine PC, traps, syscalls, and architectural register files.
 - `FlowrefDecompiler/Lift.lean` — adapter `Flowref.Ins → SInsn → SProg`. End-to-end
   proofs (decode→IL→bv_decide) for: lock, lea-add, mem load, store/load aliasing,
   succ, umax/umin (cmp+cmov), forwarding call (`apply_f`), call composed with ALU
