@@ -41,6 +41,10 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
   `plausible` sampler with a deterministic boundary battery (sub-register/sign/
   extreme edges) + full-range random sweep. This closed a soundness blind spot that
   had passed false EQUIVALENTs for bugs only diverging at large inputs.
+- **ETNF normaliser restored.** `flowref-etnf` is again a Lake executable backed by
+  `lean_duckdb`; `./run-tests.sh` step 13 builds it, writes
+  `etnf_{file,source,asm,function}.parquet`, and verifies the lossless join on the
+  committed fixture.
 - Self-authored benchmark: `decompile-bench/algorithms/<name>.c` plus narrow
   `decompile-bench/asm/<name>.S` branch-shape fixtures, one function per file;
   `algo-bench.sh` compiles each and runs the oracle. Decompiler output remains C,

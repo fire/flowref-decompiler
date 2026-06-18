@@ -12,12 +12,6 @@ regardless of the if-conversion passes. **Surviving knowledge:** to get a genuin
 branch, use `-O0` or an arm the backend cannot cmov (memory effect / call); see
 `OPEN_GAPS.md` item 1.
 
-## ETNF / DuckDB corpus normaliser — removed
-
-The `Etnf.lean` corpus normaliser, its `flowref-etnf` target, and the `lean_duckdb`
-dependency were removed (orphaned). The self-authored `decompile-bench/algorithms/`
-benchmark replaced the messy real-corpus harness as the ground-truth source.
-
 ## `plausible` `Fin 65536` sampler as the equivalence oracle — replaced
 
 The oracle's `∀ args` search over `Fin 65536` was size-biased toward small values

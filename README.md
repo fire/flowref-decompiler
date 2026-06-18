@@ -121,7 +121,8 @@ lake build
 ```
 
 `lake build` produces `.lake/build/bin/flowref-decompiler` (the CLI shown above)
-and `flowref-equiv` (the equivalence oracle).
+and `flowref-equiv` (the equivalence oracle). `lake build flowref-etnf` also
+builds the DuckDB-backed ETNF Parquet normaliser.
 
 ELF parsing is a self-contained `<elf.h>` shim — no external library to install —
 and now ships inside the [`fire/flowref`](https://github.com/fire/flowref)

@@ -22,6 +22,12 @@ require «flowref» from git
 require LeanSlang from git
   "https://github.com/V-Sekai-fire/lean-slang" @ "main"
 
+-- ETNF corpus normalisation writes Decompile-Bench rows to Parquet through
+-- DuckDB. This dependency is intentionally used only by the `flowref-etnf`
+-- executable below; the production decompiler/oracle targets do not import it.
+require lean_duckdb from git
+  "https://github.com/v-sekai-multiplayer-fabric/lean-duckdb" @ "main"
+
 @[default_target] lean_lib FlowrefDecompiler where
   -- pick up FlowrefDecompiler.lean and every FlowrefDecompiler/*.lean submodule.
   globs := #[.one `FlowrefDecompiler, .submodules `FlowrefDecompiler]
@@ -62,8 +68,13 @@ extern_lib libequivdl pkg := do
   root := `EquivCheck
   moreLinkArgs := #["-ldl"]
 
--- NOTE: the ETNF normaliser (`flowref-etnf`, root `Etnf.lean`) and its DuckDB
--- dependency were removed — it normalised the Decompile-Bench corpus to Parquet
--- and is unrelated to decompiling; the package-wide `require lean_duckdb` forced
--- a broken duckdb_shim build for every target. The decompiler + equiv oracle
--- need no DuckDB. Re-add as a separate package if corpus normalisation is needed.
+-- ETNF normaliser (`Etnf.lean`): converts flat Decompile-Bench NDJSON rows into
+-- lossless ETNF Parquet relations via lean-duckdb. Keep it as a non-default
+-- target so `lake build` for the decompiler/oracle remains decoupled from DuckDB.
+lean_exe «flowref-etnf» where
+  root := `Etnf
+  moreLinkArgs := #[
+    "-L.lake/packages/lean_duckdb/vendor", "-lduckdb",
+    "-Wl,-rpath,$ORIGIN", "-Wl,-rpath,$ORIGIN/../../../packages/lean_duckdb/vendor",
+    "-Wl,-rpath,.lake/packages/lean_duckdb/vendor"
+  ]
