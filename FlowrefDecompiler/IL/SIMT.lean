@@ -250,6 +250,54 @@ proved. -/
 def intrinsicOfCallEnv (ce : FlowrefDecompiler.IL.CallEnv) : IntrinsicEnv :=
   fun name args => if name = "call:f" then ce "f" args else 0
 
+/-- A SIMT intrinsic environment refines the sound-core call environment when
+every encoded `call:<callee>` intrinsic returns the corresponding `CallEnv`
+result. -/
+def IntrinsicRefinesCallEnv (ienv : IntrinsicEnv) (ce : FlowrefDecompiler.IL.CallEnv) : Prop :=
+  ∀ callee ws, ienv ("call:" ++ callee) ws = ce callee ws
+
+/-- List form of `fromSoundAtom_eval`, used by call-argument proofs. -/
+theorem fromSoundAtoms_eval
+    (ienv : IntrinsicEnv) (mem : FlowrefDecompiler.IL.Mem) (args slots : List Word)
+    (as : List FlowrefDecompiler.IL.Atom) :
+    (as.map (fun a => Expr.atom (fromSoundAtom a))).map
+        (fun x => x.eval ienv (LaneState.ofSound mem args slots))
+      = as.map (fun a => FlowrefDecompiler.IL.Atom.eval args slots a) := by
+  induction as with
+  | nil => simp
+  | cons a rest ih =>
+      simp only [List.map_cons, Expr.eval]
+      rw [fromSoundAtom_eval mem args slots a, ih]
+
+/-- Under an intrinsic/call-environment refinement, any embedded source call
+argument list evaluates to the same argument words used by the existing sound
+core. This is the general call bridge; fixture proofs such as `callDouble` are
+instances of it. -/
+theorem fromSoundCall_eval
+    (ienv : IntrinsicEnv) (ce : FlowrefDecompiler.IL.CallEnv)
+    (h : IntrinsicRefinesCallEnv ienv ce)
+    (mem : FlowrefDecompiler.IL.Mem) (args slots : List Word)
+    (callee : String) (as : List FlowrefDecompiler.IL.Atom) :
+    (Expr.intrinsic ("call:" ++ callee) (as.map (fun a => Expr.atom (fromSoundAtom a)))).eval
+        ienv (LaneState.ofSound mem args slots)
+      = ce callee (as.map (fun a => FlowrefDecompiler.IL.Atom.eval args slots a)) := by
+  simp only [Expr.eval]
+  rw [h]
+  rw [fromSoundAtoms_eval]
+
+/-- Executing one embedded source call writes exactly the next SIMT temporary
+with the value that the existing sound-core call environment would produce. -/
+theorem exec_fromSound_single_call_writes_next
+    (ienv : IntrinsicEnv) (ce : FlowrefDecompiler.IL.CallEnv)
+    (h : IntrinsicRefinesCallEnv ienv ce)
+    (mem : FlowrefDecompiler.IL.Mem) (args slots : List Word)
+    (next : Nat) (callee : String) (as : List FlowrefDecompiler.IL.Atom) :
+    (exec ienv (fromSoundStmts next [FlowrefDecompiler.IL.Stmt.call callee as])
+        (LaneState.ofSound mem args slots)).tmps next
+      = ce callee (as.map (fun a => FlowrefDecompiler.IL.Atom.eval args slots a)) := by
+  simp [fromSoundStmts, exec, LaneState.setTmp]
+  exact fromSoundCall_eval ienv ce h mem args slots callee as
+
 /-- Program-level SIMT embedding slice for stores and read-after-write: the
 embedded `store_two` program returns the same value as the existing sound `SProg`
 semantics for all initial memories and arguments. -/

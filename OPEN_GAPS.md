@@ -3,13 +3,24 @@
 Each item names the next decisive action when known. Completed items move to
 `CHANGELOG.md`; abandoned approaches move to `TOMBSTONES.md`.
 
-## Reranked priorities (2026-06-16)
+## Reranked priorities (2026-06-17)
 
 The leaf/flag/select/forwarding-call class is saturated, so the old "raise strict
-count on leaves" is essentially exhausted. Control flow / memory / calls hold the
-remaining value. Current order, highest first:
+count on leaves" is essentially exhausted. Real benchmark coverage now comes from
+shipping memory, calls, and then broader control flow. Proof-generalization work
+continues in parallel but should not outrank production coverage unless it blocks
+soundness. Current order, highest first:
 
-1. **Broaden branch→select lifting beyond compact diamonds.**
+1. **Single-block memory in production.** Loads/stores for register+memory leaves.
+   The IL already proves load/store/aliasing on real bytes; no CFG work needed —
+   likely the fastest real-class win. Production `emitC` currently refuses any
+   non-`lea` memory operand (`hasMemOp`).
+
+2. **General calls (combine, not just forward).** ~87% of real functions call
+   something. The IL proves `callDouble`; lift `call; <combine result with ALU>`
+   from real multi-instruction sequences. The production emitter refuses calls.
+
+3. **Broaden branch→select lifting beyond compact diamonds.**
    Strict bridges are done for compact 3-block forward branch diamonds that select
    the return register (`branch_select`, signed and unsigned predicates) and for
    merge-φ values consumed multiple times in the merge block (`branch_phi_add`,
@@ -19,49 +30,41 @@ remaining value. Current order, highest first:
    two live registers, prove both selected values lower without scope leaks, then
    widen the faithful gate only after the oracle proves it.
 
-2. **Single-block memory in production.** Loads/stores for register+memory leaves.
-   The IL already proves load/store/aliasing on real bytes; no CFG work needed —
-   likely the fastest real-class win. Production `emitC` currently refuses any
-   non-`lea` memory operand (`hasMemOp`).
-
-2a. **Canonical-machine adapters for every Capstone arch.** The mapping contract
+4. **Canonical-machine adapters for every Capstone arch.** The mapping contract
     now names all Capstone architectures in `FlowrefDecompiler/CanonicalMachine.lean`.
     Every row, including x86 and PPC, is an explicit adapter contract into the
     same small IL: lower register, immediate, memory, branch, call, and ABI facts
     into the canonical machine instead of growing per-architecture decompilers.
 
-2b. **Prove complete-IL source/refinement/render semantics.**
+5. **Prove complete-IL source/refinement/render semantics.**
     `FlowrefDecompiler.IL.Complete` now names the full target machine shape
     (regs/flags/memory/PC, scalar ops, branches, calls, traps, syscalls, fences)
-    and proves concrete step semantics for register/temp/flag assignment, byte
-    memory stores, and branch PC updates. Replace placeholder `Nat` bits with
-    width-indexed `BitVec`, then
+    and proves concrete expression reads for register/temp/flag/PC atoms plus
+    step semantics for register/temp/flag assignment, byte memory stores, and
+    branch PC updates. Replace placeholder `Nat` bits with width-indexed `BitVec`, then
     prove real source-ISA adapter semantics, an embedding from the existing sound
     `SProg` fragment, and complete renderer correctness.
 
-2c. **Finish general SIMT program-level embedding.**
-    `FlowrefDecompiler/IL/SIMT.lean` is the tinygrad-style minimal kernel core,
-    separate from machine IL. Atom, scalar-op, and RHS embedding correctness are
-    proved for ALU, global loads, and selects. Program-level slices now prove the
-    embedded `store_two` read-after-write fixture and `callDouble` via
-    `intrinsic "call:f"` agree with existing `SProg.eval`. Next, generalize those
-    fixture proofs into a statement-list simulation over arbitrary stores, calls,
-    and temporary slots, then prove `fromSoundSProg` preserves existing
-    `SProg.eval` before adding backend renderers for `Special`, `barrier`,
-    guarded stores, and WMMA/intrinsics.
+6. **Finish general SIMT program-level embedding.**
+   `FlowrefDecompiler/IL/SIMT.lean` is the tinygrad-style minimal kernel core,
+   separate from machine IL. Atom, scalar-op, and RHS embedding correctness are
+   proved for ALU, global loads, and selects. Program-level slices now prove the
+   embedded `store_two` read-after-write fixture and `callDouble` via
+   `intrinsic "call:f"` agree with existing `SProg.eval`; arbitrary single calls
+   now have an `IntrinsicRefinesCallEnv` bridge. Next, generalize the fixture
+   proofs into a statement-list simulation over arbitrary stores, calls, and
+   temporary slots, then prove `fromSoundSProg` preserves existing `SProg.eval`
+   before adding backend renderers for `Special`, `barrier`, guarded stores, and
+   WMMA/intrinsics.
 
-3. **General calls (combine, not just forward).** ~87% of real functions call
-   something. The IL proves `callDouble`; lift `call; <combine result with ALU>`
-   from real multi-instruction sequences. The production emitter refuses calls.
-
-4. **Loops** (gcd/is_prime/factorial/…). Biggest single corpus unlock, hardest
+7. **Loops** (gcd/is_prime/factorial/…). Biggest single corpus unlock, hardest
    (CFG structuring + invariant synthesis). Start with provably-bounded unrolling;
    defer general induction-from-bytes. Currently refused (multi-block).
 
-5. **Harden/broaden leaves + oracle** — opportunistic background; diminishing but
+8. **Harden/broaden leaves + oracle** — opportunistic background; diminishing but
    still occasionally finds bugs.
 
-6. **`slangcheck`** — periodic health check (every few ticks): in `/tmp/lean-slang`
+9. **`slangcheck`** — periodic health check (every few ticks): in `/tmp/lean-slang`
    ensure the vendor SDK (`vendor/fetch.sh` if `libslang.so` missing), pull if main
    moved, run `lake exe slangcheck`.
 

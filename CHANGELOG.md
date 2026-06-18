@@ -65,9 +65,9 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
 - `FlowrefDecompiler.IL.Complete` now stubs the intended complete canonical IL:
   width-tagged values, architectural regs/flags/temps/memory/PC state, scalar ops,
   expressions, stores, branches, calls, returns, traps, syscalls, and fences. It
-  proves concrete step semantics for register/temp/flag assignment, byte memory
-  stores, and branch PC updates; full source-ISA adapter and renderer refinement
-  remain open.
+  proves concrete expression reads for register/temp/flag/PC atoms plus step
+  semantics for register/temp/flag assignment, byte memory stores, and branch PC
+  updates; full source-ISA adapter and renderer refinement remain open.
 - `FlowrefDecompiler/IL/SIMT.lean` adds a separate tinygrad-style minimal SIMT
   core: launch dimensions, work-item `Special`s, address spaces, ALU/where/load,
   structured ranges/if, guarded stores, barriers, pure intrinsics/WMMA hooks, and
@@ -75,8 +75,10 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
   op, and RHS embedding correctness for ALU, global loads, and selects. It also
   proves two program-level embedding slices: `store_two` preserves read-after-write
   memory behavior, and `callDouble` preserves call semantics through the pure
-  `intrinsic "call:f"`/`CallEnv` bridge. It intentionally omits machine PC,
-  traps, syscalls, and architectural register files.
+  `intrinsic "call:f"`/`CallEnv` bridge. It now has a general
+  `IntrinsicRefinesCallEnv` contract plus a single-call theorem for arbitrary
+  callees and argument lists. It intentionally omits machine PC, traps, syscalls,
+  and architectural register files.
 - `FlowrefDecompiler/Lift.lean` — adapter `Flowref.Ins → SInsn → SProg`. End-to-end
   proofs (decode→IL→bv_decide) for: lock, lea-add, mem load, store/load aliasing,
   succ, umax/umin (cmp+cmov), forwarding call (`apply_f`), call composed with ALU

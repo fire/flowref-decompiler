@@ -941,6 +941,30 @@ def run (args : List Value) : List CStmt → State → State
   | [],      st => st
   | x :: xs, st => run args xs (step args st x)
 
+/-- Register atoms read exactly the named architectural register. -/
+theorem evalExpr_reg_atom
+    (args : List Value) (st : State) (r : String) :
+    evalExpr args st (.atom (.reg r)) = st.regs r := by
+  rfl
+
+/-- Temporary atoms read exactly the named SSA temporary. -/
+theorem evalExpr_tmp_atom
+    (args : List Value) (st : State) (i : Nat) :
+    evalExpr args st (.atom (.tmp i)) = st.tmps i := by
+  rfl
+
+/-- Flag atoms read as canonical one-bit nonzero/zero values. -/
+theorem evalExpr_flag_atom
+    (args : List Value) (st : State) (f : String) :
+    evalExpr args st (.atom (.flag f)) = { width := 1, bits := if st.flags f then 1 else 0 } := by
+  rfl
+
+/-- PC atoms read the current program counter as a 64-bit value. -/
+theorem evalExpr_pc_atom
+    (args : List Value) (st : State) :
+    evalExpr args st (.atom .pc) = { width := 64, bits := st.pc } := by
+  rfl
+
 /-- Register assignment updates exactly the named architectural register. -/
 theorem step_assignReg_reads_written
     (args : List Value) (st : State) (r : String) (e : CExpr) :
