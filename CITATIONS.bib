@@ -20,7 +20,37 @@
 % Design influence for the "minimal executable machine" direction: tinygrad keeps
 % the framework/compiler small by lowering executable work through a visible IR
 % and compact set of primitives instead of making every backend a separate system.
-@software{hotz2026tinygrad,
+@software{lambdaclass2026amolean,
+  author    = {{LambdaClass}},
+  title     = {{AMO-Lean}: Verified Optimizing Compiler for Cryptographic Primitives},
+  year      = {2026},
+  url       = {https://github.com/lambdaclass/amo_lean},
+  version   = {2.4.1},
+  note      = {Equality saturation via verified e-graph rewrite rules in Lean~4.
+               Relevant to flowref: the {\tt grind CommRing} / {\tt CommSolver}
+               pattern (proof-by-reflection over commutative semirings) can close
+               the bilinear {\tt BitVec~32} obligations in {\tt sumLoop\_snd\_double}
+               that {\tt bv\_omega} cannot handle.
+               The {\tt TRZK/ArithExpr} ring~$\mathbb{Z}/2^{32}\mathbb{Z}$
+               with {\tt Mul/Add/Sub/Neg} is isomorphic to flowref's {\tt Word}
+               arithmetic; the e-graph rewrite rules
+               ($e+0\to e$, $e*1\to e$, distribution, commutativity) apply
+               directly to the loop invariant step proofs.}
+}
+
+@misc{lean4grindring2026,
+  author    = {{Lean 4 Contributors}},
+  title     = {{Lean~4 \texttt{grind} CommRing Solver}},
+  year      = {2026},
+  url       = {https://github.com/leanprover/lean4/blob/main/src/Init/Grind/Ring/CommSolver.lean},
+  note      = {Proof-by-reflection ring/comm-semiring solver used by the {\tt grind}
+               tactic. Normalises polynomials over any {\tt CommRing} instance,
+               including {\tt BitVec~32}. Directly applicable to the bilinear
+               step in {\tt sumLoop\_snd\_double} once {\tt BitVec} has a
+               {\tt CommRing} instance (available in Mathlib $\ge$~4.26).}
+}
+
+@software{hotz2026tinygrad
   title        = {tinygrad},
   author       = {Hotz, George and contributors},
   year         = {2026},
