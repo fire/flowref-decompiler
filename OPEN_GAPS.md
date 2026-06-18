@@ -25,6 +25,18 @@ the refusal removable, and the oracle signal that marks the gap closed.
    guard dominates the division, emits C with an explicit nonzero fact, and
    returns `EQUIVALENT` under the full oracle.
 
+   The selected design is a path-fact lattice attached to the same plausible CFG
+   witnesses used by `predOf` and the faithful gates. Each conditional contributes
+   facts on its taken and fallthrough edges, such as `x != 0` from `test x,x;
+   jne`, `x == 0` from `je`, and interval-like unsigned comparisons from `cmp`.
+   The division renderer consumes only the fact needed for the divisor at the
+   instruction index; it does not invent C-side guards. If the fact is absent,
+   strict mode keeps refusing. This keeps the faithful contract local: C contains
+   ordinary `/` or `%`, and the proof obligation is dominance of the nonzero fact
+   over the original binary path. The first fixture should be a tiny guarded
+   unsigned division, followed by `gcd` only after the path facts survive a loop
+   header and back edge.
+
 2. 64-bit magic-constant division. `digit_count` is solved in the current
    32-bit faithful class, but `pow_uint` and `is_prime` use the compiler's
    64-bit reciprocal-multiply shape (`imul r64, r64; shr $k, r64`). The current
@@ -34,6 +46,19 @@ the refusal removable, and the oracle signal that marks the gap closed.
    lowers the whole `imul`/`shr` slice as one proven expression. The closure
    signal is a fixture that contains the magic-constant idiom, decompiles
    strictly without an unsafe banner, and returns `EQUIVALENT`.
+
+   The selected design is the compound-pattern theorem first, rather than a
+   global 64-bit machine widening. A recognizer matches the exact decoded slice:
+   a zero-extended 32-bit source, a fixed magic multiplier, a high-word or
+   right-shift extraction, and the final subtract/adjust sequence when the
+   compiler emits one. The renderer emits the corresponding source-level
+   quotient expression only when a theorem records the magic constant, shift,
+   rounding mode, and input range. A broad `UInt64` lane remains useful later,
+   but it would widen every SSA/type path before the project has one proven
+   reciprocal-division case. The first closure target is an isolated unsigned
+   divide-by-constant fixture whose assembly contains the `imul r64; shr` idiom;
+   `pow_uint` and `is_prime` follow after the recognizer handles surrounding
+   loop/control-flow structure.
 
 3. Chained branch-phi resolution. The current `simpleDiamondPhiExpr`
    resolves one branch diamond by proving which reaching definition comes from
@@ -51,6 +76,18 @@ the refusal removable, and the oracle signal that marks the gap closed.
    closure signal is a nested-diamond fixture that emits no `_phi` locals in
    strict mode and returns `EQUIVALENT`; a broad transitive search without CFG
    witnesses is not sound enough for the faithful gate.
+
+   The selected implementation is an expression resolver, not another SSA pass.
+   Define a helper shaped like `resolvePhiExpr(q, r, fuel, seen)` that first asks
+   `simpleDiamondPhiExpr` for the local diamond expression, then recursively
+   substitutes any operand whose reaching name is itself a recorded phi at the
+   same or dominating merge. The resolver composes ternaries only when each
+   nested diamond has a concrete `(taken def, fallthrough def)` witness and both
+   arms dominate the consumer. It stops at `fuel = 0`, at repeated `(q,r)` pairs,
+   or at branch arms that do not reconverge at the claimed merge. The faithful
+   gate then checks the resolved expression text for `_phi` before accepting.
+   This design preserves the current safety property: unresolved control-flow
+   joins stay explicit refusals instead of becoming guessed locals.
 
 4. Loop oracle proof. `sumLoop_snd_double` and `sumLoop_inv_double` in
    `FlowrefDecompiler/IL.lean` have `sorry` stubs. The induction step for
@@ -86,6 +123,17 @@ the refusal removable, and the oracle signal that marks the gap closed.
    the closure signal is readability-only diff coverage with the same
    `SOUNDNESS: 0` benchmark result.
 
+   The selected design is post-SSA copy coalescing over emitted C names. Build
+   live intervals from `defIdxByName`, `useIdxByName`, `retNameBase`, and phi-use
+   consumers, then group names by canonical register and compatible C type.
+   Parameters (`a0`, `a1`, ...) are fixed roots and cannot be renamed. A group is
+   mergeable only when intervals are disjoint and neither member crosses a scope
+   boundary that `inlineDef` relies on. The renderer can then print a single local
+   name for the group while retaining the original SSA graph internally. The
+   first fixture should assert cosmetic output only, for example a straight-line
+   ALU chain that changes from `eax_0`, `eax_1`, `eax_2` to one readable local,
+   while `flowref-equiv` and `algo-bench.sh` remain unchanged.
+
 6. Constraint-based type propagation. Values used as pointer base addresses
    in `[reg+offset]` operands are not tagged as pointer types. All variables
    emit as `uint32_t`. The missing piece is a constraint pass that records
@@ -94,6 +142,19 @@ the refusal removable, and the oracle signal that marks the gap closed.
    types for pure integer arithmetic. This has no STRICT impact until memory
    fixtures enter the faithful class; the closure signal is readable pointer C
    with unchanged oracle results.
+
+   The selected design is a conservative type-constraint pass that runs before
+   declaration emission. Memory operands create `ptr(base)` and `index(index)`
+   constraints; `lea` with small constants propagates pointer-plus-offset;
+   arithmetic that mixes two pointer candidates clears the pointer tag unless a
+   later memory use re-establishes it. The output type set stays intentionally
+   small: `uint32_t` for scalar values, `uintptr_t` for address arithmetic, and
+   `uint32_t *` only when a dereference width is known and aligned with the
+   emitted load/store. The first accepted use should stay in unsafe/readability
+   output until the memory faithful class exists, because type names alone do
+   not prove memory semantics. The closure signal is a pointer-heavy unsafe
+   fixture whose C becomes clearer without changing strict acceptance or oracle
+   counts.
 
 ---
 
