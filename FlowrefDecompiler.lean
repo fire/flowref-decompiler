@@ -234,6 +234,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     match regAliasGroups.find? (·.contains r) with
     | some g => g.getD 1 r
     | none   => r
+
   -- ===== Pass 2: reaching definitions / SSA — PLAUSIBLE-DRIVEN + iterative deepening =====
   let defSites := (Array.range nI).filterMap (fun i =>
     (writesRegX a insns[i]!).map (fun r => (i, r)))
@@ -288,7 +289,11 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
               useToVer := useToVer.insert j (((useToVer.get? j).getD []) ++ [(r, baseLocal)])
               useToPhiDefs := useToPhiDefs.insert j (((useToPhiDefs.get? j).getD []) ++ [(r, defs)])
           else
-            match sysvParamForReg pm.count r with
+            -- Live-on-entry uses may be narrower/wider aliases of SysV argument
+            -- registers (`dil`/`edi`/`rdi` all mean argument 0). Canonicalize before
+            -- asking the ABI model so unsafe multi-block output does not invent an
+            -- uninitialized local such as `edi` for an argument use.
+            match sysvParamForReg pm.count (canonReg r) with
             | some nm => useToVer := useToVer.insert j (((useToVer.get? j).getD []) ++ [(r, nm)])
             | none    => pure ()  -- genuine unknown source: leave as `r` (a local).
       | [only] =>
@@ -706,9 +711,20 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
               match ((useToPhiDefs.get? q).getD [] |>.lookup rr).bind (fun defs => simpleDiamondPhiExpr q rr defs) with
               | some phi => (rr, phi)
               | none => (rr, nm))
-          let rhs := if ins.mn.startsWith "cmov" then (cmovRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
-                     else if ins.mn.startsWith "set" then (setccRhs q ins).getD (applyCdecl (renderExprC a ins subs))
-                     else applyCdecl (renderExprC a ins subs)
+          let rhs0 := if ins.mn.startsWith "cmov" then (cmovRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
+                      else if ins.mn.startsWith "set" then (setccRhs q ins).getD (applyCdecl (renderExprC a ins subs))
+                      else applyCdecl (renderExprC a ins subs)
+          -- Self-move canonicalization (`mov edi,edi`) is a zero-extension idiom.
+          -- Reaching-def search sees the destination clobber and can leave the source
+          -- as raw `edi`; if that raw source is a live-on-entry SysV argument, render
+          -- the parameter rather than an invented local.
+          let rhs :=
+            match ins.mn, (ins.ops.splitOn ",").map (·.trimAscii.toString) with
+            | "mov", [dst, src] =>
+              if dst == src && rhs0 == src then
+                (sysvParamForReg pm.count src).getD rhs0
+              else rhs0
+            | _, _ => rhs0
           -- declare-at-definition; the declared type does the truncation a cast did.
           if inlineDef.contains nm then some s!"{regCType r} {nm} = {rhs};"
           else some s!"{nm} = ({regCType r})({rhs});"
