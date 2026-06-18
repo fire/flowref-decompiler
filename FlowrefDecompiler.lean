@@ -579,9 +579,12 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     let t := tok.trimAscii.toString
     if t.startsWith "0x" ∨ t.startsWith "-" ∨ (¬ t.isEmpty ∧ t.front.isDigit) then t
     else
-      match ((useToPhiDefs.get? q).getD [] |>.lookup t).bind (fun defs => simpleDiamondPhiExpr q t defs) with
+      match simpleDiamondPhiExpr q t [] with
       | some phi => phi
-      | none => (subs.lookup t).getD (cName t)
+      | none =>
+        match ((useToPhiDefs.get? q).getD [] |>.lookup t).bind (fun defs => simpleDiamondPhiExpr q t defs) with
+        | some phi => phi
+        | none => (subs.lookup t).getD (cName t)
   -- C comparison operator for a conditional-move suffix, after `cmp X, Y`
   -- (flags = X − Y). `none` for an unmodelled condition.
   let cmovCondOp : String → Option String := fun mn =>
@@ -660,9 +663,12 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
         if okLocal nm then
           let subs0 := (useToVer.get? q).getD []
           let subs := subs0.map (fun (rr, nm) =>
-            match ((useToPhiDefs.get? q).getD [] |>.lookup rr).bind (fun defs => simpleDiamondPhiExpr q rr defs) with
+            match simpleDiamondPhiExpr q rr [] with
             | some phi => (rr, phi)
-            | none => (rr, nm))
+            | none =>
+              match ((useToPhiDefs.get? q).getD [] |>.lookup rr).bind (fun defs => simpleDiamondPhiExpr q rr defs) with
+              | some phi => (rr, phi)
+              | none => (rr, nm))
           let rhs := if ins.mn.startsWith "cmov" then (cmovRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
                      else if ins.mn.startsWith "set" then (setccRhs q ins).getD (applyCdecl (renderExprC a ins subs))
                      else applyCdecl (renderExprC a ins subs)

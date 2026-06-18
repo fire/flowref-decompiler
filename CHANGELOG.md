@@ -22,6 +22,9 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
 - **CFG recovery reuses the plausible witness DAG.** Do not write new dataflow/CFG
   analysis — reuse `reachingDefsB`/`resolveReachingDef`/`certifyReaching`,
   `condBlocks`, `predOf`, and the plausible back-edge check. It works and is fast.
+- **Minimal executable machine first.** Follow the tinygrad-style insight: encode
+  executable semantics through a small canonical machine/IL, not by solving every
+  architecture independently. Architecture adapters feed the same core.
 
 ## Done — production decompiler (faithful-or-refuse)
 
@@ -85,3 +88,6 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
 - Merge φ uses in a compact branch diamond now lower to an explicit ternary when
   both branch-arm definitions are matched to the reaching-def witness set; φ-arm
   SSA values are kept in outer scope so generated C remains compilable.
+- Compact branch-diamond merge φ values can now be consumed more than once in the
+  merge block. `branch_phi_twouse` proves both uses of the same selected register
+  lower to the same ternary instead of reusing one branch arm's SSA local.

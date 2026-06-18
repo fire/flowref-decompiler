@@ -12,13 +12,12 @@ remaining value. Current order, highest first:
 1. **Broaden branch→select lifting beyond compact diamonds.**
    Strict bridges are done for compact 3-block forward branch diamonds that select
    the return register (`branch_select`, signed and unsigned predicates) and for
-   the first merge-φ value use (`branch_phi_add`). The next gateway is multi-use or
-   multi-instruction merge blocks where several modeled operations consume the same
-   selected value, and then diamonds whose branch arms compute more than one live
-   value.
-   **Next decisive action:** add the smallest second φ fixture with two merge uses
-   of the selected register, prove both uses lower to the same ternary without
-   scope leaks, then widen the faithful gate only after the oracle proves it.
+   merge-φ values consumed multiple times in the merge block (`branch_phi_add`,
+   `branch_phi_twouse`). The next gateway is diamonds whose branch arms compute
+   more than one live selected value.
+   **Next decisive action:** add the smallest fixture where both branch arms define
+   two live registers, prove both selected values lower without scope leaks, then
+   widen the faithful gate only after the oracle proves it.
 
 2. **Single-block memory in production.** Loads/stores for register+memory leaves.
    The IL already proves load/store/aliasing on real bytes; no CFG work needed —
