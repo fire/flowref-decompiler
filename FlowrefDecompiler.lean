@@ -979,20 +979,20 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- condition (a preceding `cmp`, or a CF-setting `add`/`sub` for an unsigned
   -- cmov). Tying the gate to `cmovRhs.isSome` keeps emitter and gate in lockstep:
   -- anything the emitter cannot lower to a real ternary is refused, not guessed.
-  let cmovsModeled := (Array.range nI).all (fun q =>
-    ¬ insns[q]!.mn.startsWith "cmov" ∨
+  let cmovsModeled : Bool := (Array.range nI).all (fun q =>
+    !insns[q]!.mn.startsWith "cmov" ||
       (cmovRhs q insns[q]! ((useToVer.get? q).getD [])).isSome)
   -- Likewise every `setcc` must resolve to a `(cond) ? 1 : 0` (a modeled suffix
   -- with a resolvable flag source); an unmodeled set* (setg/setl/sets/setp …) or
   -- a setcc with no preceding flag-setter ⇒ refuse.
-  let setccModeled := (Array.range nI).all (fun q =>
-    ¬ insns[q]!.mn.startsWith "set" ∨ (setccRhs q insns[q]!).isSome)
+  let setccModeled : Bool := (Array.range nI).all (fun q =>
+    !insns[q]!.mn.startsWith "set" || (setccRhs q insns[q]!).isSome)
   -- No cmov-count cap: a cmov result that feeds a later `cmp`/`cmov` is resolved
   -- correctly now that the single-block reaching-def is cmov-aware (canonical
   -- width keys + latest-def-before-use fallback). Each cmov must still resolve
   -- (`cmovsModeled`); chains of any length lift soundly (e.g. med3 = 4 cmovs).
-  let allModeled := a != .x86 ∨
-    (insns.all (fun i => modeledX86 i.mn) ∧ cmovsModeled ∧ setccModeled)
+  let allModeled : Bool := a != .x86 ||
+    (insns.all (fun i => modeledX86 i.mn) && cmovsModeled && setccModeled)
   -- First faithful multi-block bridge: a 3-block branch diamond whose only
   -- control-flow effect is selecting a value.  The original case selected the
   -- returned register directly; the φ case selects a non-return register at the
