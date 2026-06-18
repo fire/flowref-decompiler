@@ -47,13 +47,13 @@ Current score: **46/61 EQUIVALENT, SOUNDNESS 0.**
    readability. **Next decisive action:** implement a live-range analysis over the SSA
    def/use graph, then rename vars in the emit pass.
 
-4. **Graceful degradation for unmodeled instructions.** Currently strict mode refuses
-   any function with an unmodeled instruction. MVP quality requires embedding a fallback
-   inline hint (e.g. `/* unmodeled: <insn> */`) rather than refusing entirely, so
-   coverage includes partial decompilations. **Next decisive action:** widen the
-   faithful gate to also classify "partial" functions that have ≤N unmodeled instrs,
-   emit the body with `/* unmodeled */` comments, and verify the oracle reports
-   INCOMPARABLE (never NOT-EQUIVALENT) for them.
+4. ~~**Graceful degradation for unmodeled instructions.**~~ **VETOED.** Emitting
+   partial bodies with `/* unmodeled: <insn> */` comments directly contradicts the
+   faithful-or-refuse contract (rule I0 in CHANGELOG). A user reading decompiled C
+   has no way to know which parts are correct and which are gaps — the result is
+   plausible-looking but wrong output, which is strictly worse than a hard refusal.
+   The correct path for coverage is to **model the instruction** (add it to the
+   emitter and prove the gate), not to silently skip it. Moved to TOMBSTONES.md.
 
 5. **Constraint-based type propagation.** The emitter infers types from physical width
    only (`uint32_t`). A proper MVP needs: if a value is used as a pointer base with

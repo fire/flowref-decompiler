@@ -22,6 +22,27 @@ see `CHANGELOG.md`). Note: `plausible` is still correct and used for the
 reaching-def witness search, where it hunts for *any* counterexample to existence,
 not value-equivalence over the full input range.
 
+## Graceful degradation via `/* unmodeled */` inline comments — vetoed
+
+Proposed: when a function contains unmodeled instructions, emit the body anyway
+with `/* unmodeled: <insn> */` comment placeholders instead of refusing entirely.
+
+**Why this is wrong:** the faithful-or-refuse contract (rule I0) exists precisely
+because partial output is more dangerous than no output. A caller reading decompiled
+C with silent `/* unmodeled */` gaps cannot tell which parts are correct. The result
+looks plausible, compiles, and may pass a quick smoke test — but embeds holes that
+cause wrong behaviour. This is strictly worse than a hard refusal, which forces the
+caller to acknowledge the gap.
+
+The `--unsafe` flag already exists for exploratory inspection of unlifted functions.
+It carries an explicit "NOT faithful — do not trust" banner and is never recorded as
+EQUIVALENT by the oracle. That is the correct safety valve.
+
+**Surviving knowledge:** if a class of unmodeled instructions is worth handling,
+the right path is: add the instruction to `modeledX86`, add an emitter case in
+`renderExprC`, prove the gate extension sound via the oracle, widen the faithful gate
+only after `SOUNDNESS: 0` is confirmed with a full oracle timeout.
+
 ## `isGuardedLoop5` gate — widened without full oracle check, reverted
 
 The Hermes autoresearch cron committed a `isGuardedLoop5 : Bool` gate that widened
