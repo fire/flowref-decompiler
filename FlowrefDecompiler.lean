@@ -641,6 +641,10 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     else if mn == "cmova" ∨ mn == "cmovnbe" then some ">"
     else if mn == "cmove" ∨ mn == "cmovz" then some "=="
     else if mn == "cmovne" ∨ mn == "cmovnz" then some "!="
+    -- SF-based: cmovs = move if sign (result < 0); cmovns = move if not sign (≥ 0).
+    -- Used by the neg+cmovs idiom for signed absolute value.
+    else if mn == "cmovs" then some "s<"
+    else if mn == "cmovns" then some "s>="
     else none
   -- The C predicate a conditional consumes, from the nearest preceding flag-setter
   -- before index `q` and the C op `op` derived from the condition-code suffix. The
@@ -651,6 +655,18 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- Only the soundly-modelable (setter, op) pairs return a condition; anything else
   -- ⇒ `none` ⇒ refuse. Shared by `cmovcc` and `setcc`.
   let condFromFlags : Nat → String → Option String := fun q op =>
+    -- SF-based conditions (s< / s>=): find the nearest SF-setting instruction
+    -- (neg, add, sub, and, or, xor, inc, dec) and compare its signed result to 0.
+    -- Used by cmovs/cmovns after neg for the abs() idiom.
+    if op == "s<" ∨ op == "s>=" then
+      let sfSetters := ["neg","add","sub","and","or","xor","inc","dec","imul","shr","sar","shl"]
+      match (List.range q).reverse.find? (fun k => sfSetters.contains insns[k]!.mn) with
+      | some ck =>
+        let resultSSA := cName ((ssaName.get? ck).getD insns[ck]!.mn)
+        let cmp := if op == "s<" then "<" else ">="
+        some s!"(int32_t)({resultSSA}) {cmp} 0"
+      | none => none
+    else
     match (List.range q).reverse.find? (fun k =>
             let m := insns[k]!.mn; m == "cmp" ∨ m == "add" ∨ m == "sub" ∨ m == "test") with
     | some ck =>
