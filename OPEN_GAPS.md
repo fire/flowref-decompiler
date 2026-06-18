@@ -7,12 +7,13 @@ Each item states where the system stands. Completed items move to
 
 Score: **46/61 EQUIVALENT, SOUNDNESS 0.**
 
-### Immediate production coverage
+### Production coverage — STRICT count impact
 
-1. **5-block guarded loop CFG fix.** Sum_to_n, factorial, popcount, ctz, log2_floor,
-   and fib_iter share a "guard + counted loop" shape. The emitter puts the early-exit
+1. **5-block guarded loop CFG fix.** (+5 STRICT) Sum_to_n, factorial, popcount, ctz,
+   and log2_floor share a "guard + counted loop" shape. The emitter puts the early-exit
    block inside an if-body and emits a cross-scope `goto` back into it. The oracle
-   refuses all six as INCOMPARABLE.
+   refuses all five as INCOMPARABLE. Fib_iter has `data16 nopw` and stays INCOMPARABLE
+   regardless.
 
    A prior attempt (`isGuardedLoop5` gate) produced SOUNDNESS: 3 — see TOMBSTONES.md.
 
@@ -33,9 +34,15 @@ Score: **46/61 EQUIVALENT, SOUNDNESS 0.**
 
    WIP lives in `git stash@{0}` ("WIP: guardedLoopFaithful gate + emitter fix").
 
-2. **isqrt oracle gap.** `isqrt` is in `simpleLoopFaithful` and the emitted C is
-   correct, but the dynamic oracle times out: `isqrt(UINT_MAX)` runs ~65535 iterations
-   and the plausible search exhausts its budget before finding a witness.
+2. **Provably-bounded unrolling for small fixed-count loops.** (+N STRICT, blocked on
+   item 1) The infrastructure for loop-carried SSA and the guarded-loop emitter, once
+   landed, enables a straight-line unroll gate for loops with a statically constant
+   trip count. No implementation exists yet.
+
+3. **isqrt oracle gap.** (+1 STRICT) `isqrt` is in `simpleLoopFaithful` and the
+   emitted C is correct, but the dynamic oracle times out: `isqrt(UINT_MAX)` runs
+   ~65535 iterations and the plausible search exhausts its budget before finding a
+   witness.
 
    Capping the oracle range is wrong — see TOMBSTONES.md.
 
@@ -62,26 +69,26 @@ Score: **46/61 EQUIVALENT, SOUNDNESS 0.**
    That needs inspection before the IL proof is written. The proof target is
    `isqrtIter` + `isqrtIter_correct` in `IL.lean`; `EquivCheck.lean` is not touched.
 
-3. **Variable coalescing gap.** The emitter produces `eax_0`, `eax_1` SSA-versioned
-   names. Non-overlapping live ranges of the same physical register are not collapsed,
-   so output reads as compiler intermediate text rather than idiomatic C. This does not
-   affect correctness or the STRICT count. A live-range analysis over the SSA def/use
-   graph feeds a rename pass in the emitter.
+### Proof track — formal moat
 
-4. **Constraint-based type propagation gap.** The emitter infers types from physical
-   width only (`uint32_t`). A value used as a base address in `[reg+offset]` memory
-   operands is not tagged as a pointer type. A data-flow pass propagating
-   pointer-constraint facts through def/use chains is absent.
-
-### Ongoing proof work
-
-5. **SIMT program-level embedding incomplete.** `FlowrefDecompiler/IL/SIMT.lean` has
+4. **SIMT program-level embedding incomplete.** `FlowrefDecompiler/IL/SIMT.lean` has
    one-step bridge theorems for arbitrary single binds, stores, and calls. Statement-
    list simulation is not composed, and `fromSoundSProg` preserving `SProg.eval` is
    not proved.
 
-6. **Provably-bounded unrolling for small fixed-count loops** is absent. It depends on
-   the guarded-loop fix (item 1) landing first.
+### Readability — no STRICT impact
+
+5. **Variable coalescing gap.** The emitter produces `eax_0`, `eax_1` SSA-versioned
+   names. Non-overlapping live ranges of the same physical register are not collapsed,
+   so output reads as compiler intermediate text rather than idiomatic C. A live-range
+   analysis over the SSA def/use graph feeds a rename pass in the emitter.
+
+6. **Constraint-based type propagation gap.** The emitter infers types from physical
+   width only (`uint32_t`). A value used as a base address in `[reg+offset]` memory
+   operands is not tagged as a pointer type. A data-flow pass propagating
+   pointer-constraint facts through def/use chains is absent.
+
+### Minor
 
 7. **`slangcheck` whileLoopShader body is dead-code-eliminated.** The shader emits
    168 bytes because the loop body has no side effects. A side-effecting body is
