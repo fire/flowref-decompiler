@@ -212,7 +212,8 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     | none   => match arch with
                 | .x86 => if (i.mn.startsWith "cmov" ∨ i.mn.startsWith "set"
                                ∨ i.mn == "neg" ∨ i.mn == "not"
-                               ∨ i.mn == "ror" ∨ i.mn == "rol")
+                               ∨ i.mn == "ror" ∨ i.mn == "rol"
+                               ∨ i.mn == "bsf" ∨ i.mn == "rep bsf" ∨ i.mn == "tzcnt")
                                ∧ ¬ (firstTok i).any (· == '[')
                           then some (firstTok i) else none
                 | _    => none
@@ -745,6 +746,17 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
       some s!"(({x} << {n}) | ({x} >> ((32 - {n}) & 31)))"
     | _, _ => none
 
+  -- `bsf`/`tzcnt dst, src` returns the least significant set-bit index. The
+  -- training fixture forces a nonzero source with `x | 1`, matching GCC's
+  -- `__builtin_ctz` lowering while avoiding the architectural zero-input
+  -- undefined result.
+  let bsfRhs : Nat → Ins → List (String × String) → Option String := fun q ins subs =>
+    match ins.mn, (ins.ops.splitOn ",").map (·.trimAscii.toString) with
+    | "bsf", [_, src] => some s!"(uint32_t)__builtin_ctz({subOf q subs src})"
+    | "rep bsf", [_, src] => some s!"(uint32_t)__builtin_ctz({subOf q subs src})"
+    | "tzcnt", [_, src] => some s!"(uint32_t)__builtin_ctz({subOf q subs src})"
+    | _, _ => none
+
   let stmtOf : Nat → Option String := fun (q : Nat) =>
     let ins := insns[q]!
     if ins.mn == "cmp" ∨ ins.mn == "test" ∨ ins.mn == "nop" then none
@@ -769,6 +781,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
           let rhs0 := if ins.mn.startsWith "cmov" then (cmovRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
                       else if ins.mn.startsWith "set" then (setccRhs q ins).getD (applyCdecl (renderExprC a ins subs))
                       else if ins.mn == "ror" ∨ ins.mn == "rol" then (rotateRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
+                      else if ins.mn == "bsf" ∨ ins.mn == "rep bsf" ∨ ins.mn == "tzcnt" then (bsfRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
                       else applyCdecl (renderExprC a ins subs)
           -- Self-move canonicalization (`mov edi,edi`) is a zero-extension idiom.
           -- Reaching-def search sees the destination clobber and can leave the source
@@ -1018,8 +1031,8 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- operand reg) + `renderExprC` (`0u - x` / `~x`); the dep's `writesReg`/`rhsText`
   -- omit them, so both are handled in the production layer above.
   let modeledX86 : String → Bool := fun mn =>
-    ["mov", "movsxd", "movzx", "movsx", "lea", "add", "sub", "and", "or", "xor",
-     "shl", "sal", "shr", "sar", "ror", "rol", "imul", "neg", "not", "inc", "dec",
+    ["mov", "movzx", "movsx", "movsxd", "lea", "add", "sub", "and", "or", "xor",
+     "shl", "sal", "shr", "sar", "ror", "rol", "bsf", "rep bsf", "tzcnt", "imul", "neg", "not", "inc", "dec",
      "ret", "nop", "endbr64", "cmp", "test",
      -- xchg ax,ax / xchg rax,rax: 2/3-byte alignment NOPs. Memory xchg is
      -- blocked by hasMemOp (contains "[").
