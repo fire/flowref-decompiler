@@ -285,6 +285,29 @@ theorem fromSoundCall_eval
   rw [h]
   rw [fromSoundAtoms_eval]
 
+/-- Executing one embedded source binding writes exactly the next SIMT temporary
+with the same RHS value as the existing sound-core semantics. -/
+theorem exec_fromSound_single_bind_writes_next
+    (ienv : IntrinsicEnv) (mem : FlowrefDecompiler.IL.Mem) (args slots : List Word)
+    (next : Nat) (rhs : FlowrefDecompiler.IL.Rhs) :
+    (exec ienv (fromSoundStmts next [FlowrefDecompiler.IL.Stmt.bind rhs])
+        (LaneState.ofSound mem args slots)).tmps next
+      = FlowrefDecompiler.IL.Rhs.eval mem args slots rhs := by
+  simp [fromSoundStmts, exec, LaneState.setTmp, fromSoundRhs_eval]
+
+/-- Executing one embedded source store writes the same global-memory cell with
+the same value as the existing sound-core store semantics. -/
+theorem exec_fromSound_single_store_writes_addr
+    (ienv : IntrinsicEnv) (mem : FlowrefDecompiler.IL.Mem) (args slots : List Word)
+    (next : Nat) (addr val : FlowrefDecompiler.IL.Atom) :
+    (exec ienv (fromSoundStmts next [FlowrefDecompiler.IL.Stmt.store addr val])
+        (LaneState.ofSound mem args slots)).mem .global
+          (FlowrefDecompiler.IL.Atom.eval args slots addr)
+      = FlowrefDecompiler.IL.Atom.eval args slots val := by
+  cases addr <;> cases val <;>
+    simp [fromSoundStmts, exec, LaneState.store, fromSoundAtom, LaneState.ofSound,
+      Expr.eval, Atom.eval]
+
 /-- Executing one embedded source call writes exactly the next SIMT temporary
 with the value that the existing sound-core call environment would produce. -/
 theorem exec_fromSound_single_call_writes_next

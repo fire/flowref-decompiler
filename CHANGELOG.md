@@ -76,9 +76,9 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
   proves two program-level embedding slices: `store_two` preserves read-after-write
   memory behavior, and `callDouble` preserves call semantics through the pure
   `intrinsic "call:f"`/`CallEnv` bridge. It now has a general
-  `IntrinsicRefinesCallEnv` contract plus a single-call theorem for arbitrary
-  callees and argument lists. It intentionally omits machine PC, traps, syscalls,
-  and architectural register files.
+  `IntrinsicRefinesCallEnv` contract plus arbitrary single-step bridge theorems
+  for embedded binds, global stores, and calls. It intentionally omits machine PC,
+  traps, syscalls, and architectural register files.
 - `FlowrefDecompiler/Lift.lean` — adapter `Flowref.Ins → SInsn → SProg`. End-to-end
   proofs (decode→IL→bv_decide) for: lock, lea-add, mem load, store/load aliasing,
   succ, umax/umin (cmp+cmov), forwarding call (`apply_f`), call composed with ALU

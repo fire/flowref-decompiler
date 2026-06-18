@@ -50,12 +50,12 @@ soundness. Current order, highest first:
    separate from machine IL. Atom, scalar-op, and RHS embedding correctness are
    proved for ALU, global loads, and selects. Program-level slices now prove the
    embedded `store_two` read-after-write fixture and `callDouble` via
-   `intrinsic "call:f"` agree with existing `SProg.eval`; arbitrary single calls
-   now have an `IntrinsicRefinesCallEnv` bridge. Next, generalize the fixture
-   proofs into a statement-list simulation over arbitrary stores, calls, and
-   temporary slots, then prove `fromSoundSProg` preserves existing `SProg.eval`
-   before adding backend renderers for `Special`, `barrier`, guarded stores, and
-   WMMA/intrinsics.
+   `intrinsic "call:f"` agree with existing `SProg.eval`; arbitrary single binds,
+   stores, and calls now have executable one-step bridge theorems. Next, compose
+   those one-step bridges into a statement-list simulation over arbitrary stores,
+   calls, and temporary slots, then prove `fromSoundSProg` preserves existing
+   `SProg.eval` before adding backend renderers for `Special`, `barrier`, guarded
+   stores, and WMMA/intrinsics.
 
 7. **Loops** (gcd/is_prime/factorial/…). Biggest single corpus unlock, hardest
    (CFG structuring + invariant synthesis). Start with provably-bounded unrolling;

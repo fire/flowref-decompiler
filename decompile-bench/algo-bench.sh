@@ -14,18 +14,12 @@ FR="${FLOWREF:-$here/../.lake/build/bin/flowref-decompiler}"
 CC="${CC:-cc}"
 SRCDIR="$here/algorithms"
 ASMDIR="$here/asm"
+. "$here/training-functions.sh"
 
 # Order mirrors the structural grouping of the source set: leaves, bit tricks /
 # multi-cmov, counted loops, data-dependent loops, then a call. Keep in sync with
 # the files in algorithms/ (each file defines exactly the function it is named).
-FUNCS="id32 add2 umax umin abs_diff gray_code avg_floor \
-       isolate_lowest_bit clear_lowest_bit clamp max3 min3 sat_add sat_sub diff_or_zero \
-       parity bit_merge mul5 lin2 combine4 pack16 mul7 to_byte to_half med3 \
-       to_sbyte to_shalf shift_r shift_l mul_imm addr_calc scale8 nand \
-       sel_nz is_zero cmp_lt cmp_le cmp_eq nonzero is_even in_range branch_select branch_select_slt branch_phi_add branch_phi_twouse \
-       russian_mul count_divisors \
-       sum_to_n factorial fib_iter popcount log2_floor reverse_bits ctz digit_count \
-       gcd isqrt pow_uint is_prime collatz_steps lcm"
+FUNCS="$TRAINING_FUNCS"
 
 total=0; proven=0; unsafe_ok=0; violations=0
 printf "%-15s %-14s %s\n" "function" "STRICT" "UNSAFE-compiles"
