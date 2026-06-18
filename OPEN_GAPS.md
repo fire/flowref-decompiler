@@ -69,6 +69,33 @@ Current score: **46/61 EQUIVALENT, SOUNDNESS 0.**
 
 8. **`slangcheck`** — periodic health check in `/tmp/lean-slang`.
 
+## MVP gap analysis (added 2026-06-18)
+
+The engine has two distinct tracks:
+
+**Track A — coverage (fixes STRICT count):** The 5-block loop CFG fix is the single
+highest-leverage remaining structural change. It unlocks factorial, popcount, sum_to_n,
+ctz, log2_floor, fib_iter in one shot. The approach is heuristic, not a full
+interval-analysis pass: detect the specific 5-block "guarded loop" topological pattern
+and emit a guard-first `if (n==0) return 0; do { ... } while (cond);` instead of the
+cross-scope goto currently produced.
+
+**Track B — readability (moves toward production quality):**
+- Variable coalescing: rename `eax_0`/`eax_1` into a single `eax` when live ranges
+  don't overlap. Purely aesthetic — doesn't affect correctness or STRICT count.
+- Graceful degradation: emit `/* unmodeled: <insn> */` inline rather than refusing
+  the whole function. Increases coverage on real binaries.
+- Type propagation: tag SSA values as struct pointers when used as base addresses.
+
+**Track C — formal advantage (unique to this decompiler):**
+The IL (`FlowrefDecompiler/IL.lean`) uses `bv_decide` to bitblast the IL to SAT,
+proving equivalence as a theorem rather than via testing. This is what no commercial
+decompiler does. The SIMT core, loop-carried embedding proofs, and `CallEnv`
+uninterpreted-summary approach are the formal verification moat.
+
+Track A is required before Track B is worth doing — unreadable but correct output
+is better than readable but wrong output.
+
 ## Honest coverage gap
 
 46/61 = 75% on the self-authored training set.

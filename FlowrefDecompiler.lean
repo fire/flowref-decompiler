@@ -813,10 +813,36 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
         | some tb =>
           let nestOk : Bool := match stack with | (0, k, _) :: _ => decide (tb ≤ k) | _ => true
           if decide (tb > b) && nestOk then
-            -- forward conditional → if-then over [b+1, tb): take the body when the
-            -- branch is NOT taken.
-            body := body ++ pad ++ s!"if (!({predOf b})) " ++ "{\n"
-            stack := (0, tb, "}") :: stack
+            -- Check for the 5-block guarded-loop shape:
+            --   nB=5, one loop header, condBlocks=[b, lh], earlyB (=tb) has an
+            --   unconditional jump to a merge block that ends in ret.
+            -- In this case, invert the if and emit the early-exit inline so the
+            -- loop body is not nested inside an if-block (avoiding cross-scope goto).
+            let isGuardedLoop5 : Bool :=
+              nB == 5 ∧ loopHeaders.length == 1 ∧ b == 0 ∧ tb == 4 ∧
+              condBlocks.length == 2 ∧ condBlocks.contains 2 ∧
+              (uncondTgtBlk tb).isSome   -- earlyB jumps to merge
+            if isGuardedLoop5 then
+              -- Emit inverted guard: `if (pred) { early-exit body }` then fall
+              -- straight through to the init and loop without any if-nesting.
+              body := body ++ pad ++ s!"if ({predOf b}) " ++ "{\n"
+              -- Emit earlyB (tb=4) statements inline inside the guard, then close.
+              let earlyBB := blocks[tb]!
+              let earlyStmtHi := if isUncondJmp a insns[earlyBB.hi - 1]! then earlyBB.hi - 1 else earlyBB.hi
+              for q in [earlyBB.lo:earlyStmtHi] do
+                match stmtOf q with
+                | some s => body := body ++ pad ++ "  " ++ s ++ "\n"
+                | none   => pure ()
+              -- The early-exit path ends by jumping to the merge block (B3); emit
+              -- that as a return of the merge block's return value.
+              body := body ++ pad ++ s!"  return {retName (earlyBB.hi - 1)};\n"
+              body := body ++ pad ++ "}\n"
+              termConsumed := true
+            else
+              -- Normal forward conditional → if-then over [b+1, tb): take the body
+              -- when the branch is NOT taken.
+              body := body ++ pad ++ s!"if (!({predOf b})) " ++ "{\n"
+              stack := (0, tb, "}") :: stack
           else
             body := body ++ pad ++ s!"if ({predOf b}) goto L{tb};\n"
         | none => pure ()      -- conditional tail to external: fall through
