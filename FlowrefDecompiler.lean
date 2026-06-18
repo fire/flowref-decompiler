@@ -367,6 +367,28 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- the implicit return register
   let retReg := match a with | .x86 => "eax" | .ppc => "r3"
   declSet := declSet.insert (cName retReg) (regCType retReg)
+  let mulLowExprBeforeRet : Nat → Option String := fun q =>
+    if a != .x86 || retReg != "eax" then none
+    else
+      match (List.range q).reverse.find? (fun k => insns[k]!.mn == "mul") with
+      | none => none
+      | some mi =>
+        let eaxOverwrittenAfterMul := (List.range (q - (mi + 1))).any (fun off =>
+          let k := mi + 1 + off
+          match writesRegX a insns[k]! with
+          | some r => canonReg r == "eax"
+          | none => false)
+        if eaxOverwrittenAfterMul then none
+        else
+          match (insns[mi]!.ops.splitOn ",").map (·.trimAscii.toString) with
+          | [src] =>
+            let lhs :=
+              match (defSites.filter (fun p => canonReg p.2 == "eax" && p.1 < mi)).back? with
+              | some (di, _) => cName ((ssaName.get? di).getD "eax")
+              | none => (sysvParamForReg pm.count "eax").getD "eax"
+            let srcNm := ((useToVer.get? mi).getD [] |>.lookup src).map cName |>.getD ((sysvParamForReg pm.count src).getD (cName src))
+            some s!"(uint32_t)((uint64_t){lhs} * (uint64_t){srcNm})"
+          | _ => none
   -- The value returned by a `ret` is the SSA version of the return register
   -- that *reaches* that `ret`, not the zero-initialised base local. With a
   -- single reaching def we wire the return to it (so `return 7;` survives);
@@ -379,9 +401,12 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     -- cmov result would be dropped and the bare register returned). Multi-block
     -- (`--unsafe`) keeps the dep's dominator-aware reaching def.
     if nB == 1 then
-      match (defSites.filter (fun p => canonReg p.2 == canonReg retReg ∧ p.1 < q)).back? with
-      | some (di, _) => cName ((ssaName.get? di).getD retReg)
-      | none         => cName retReg
+      match mulLowExprBeforeRet q with
+      | some expr => expr
+      | none =>
+        match (defSites.filter (fun p => canonReg p.2 == canonReg retReg ∧ p.1 < q)).back? with
+        | some (di, _) => cName ((ssaName.get? di).getD retReg)
+        | none         => cName retReg
     else
       match (reachingDefsB 4000 insns addr2idx a q retReg).1 with
       | [di] => cName ((ssaName.get? di).getD retReg)
@@ -1138,9 +1163,10 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- a setcc with no preceding flag-setter ⇒ refuse.
   let setccModeled : Bool := (Array.range nI).all (fun q =>
     !insns[q]!.mn.startsWith "set" || (setccRhs q insns[q]!).isSome)
-  -- `mul` is modeled only for the high-half EDX result. Because x86 also clobbers
-  -- EAX with the low half, require the first later EAX event to be an explicit
-  -- write (for example `mov edx, eax`) rather than a read/return of stale EAX.
+  -- `mul` exposes the high-half EDX result through SSA and also allows the common
+  -- low-half idiom where EAX is returned immediately after the multiply. Because
+  -- the current SSA layer has one def per instruction, any other later EAX use is
+  -- refused unless an explicit instruction overwrites EAX first.
   let mulModeled : Bool := (Array.range nI).all (fun q =>
     if insns[q]!.mn != "mul" then true
     else
@@ -1155,8 +1181,10 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
       match (List.range (nI - (q + 1))).find? (fun off =>
         let k := q + 1 + off
         readsEax insns[k]! || writesEax insns[k]!) with
-      | some off => writesEax insns[q + 1 + off]!
-      | none => false)
+      | some off =>
+        let k := q + 1 + off
+        writesEax insns[k]! || insns[k]!.mn.startsWith "ret"
+      | none => true)
   -- No cmov-count cap: a cmov result that feeds a later `cmp`/`cmov` is resolved
   -- correctly now that the single-block reaching-def is cmov-aware (canonical
   -- width keys + latest-def-before-use fallback). Each cmov must still resolve
