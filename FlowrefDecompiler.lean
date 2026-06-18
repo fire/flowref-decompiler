@@ -447,7 +447,15 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     let mut s : Std.HashSet String := {}
     for (nm, di) in defIdxByName.toList do
       let db := idx2blk[di]!
+      -- A block is a loop header if it appears in whileHdr, doWhileHdr, OR is a
+      -- back-edge target (loopHeaders). Self-loops (back-edge from B to B) are NOT
+      -- in whileHdr/doWhileHdr but ARE in loopHeaders. Exclude all three: inlining
+      -- a def inside a loop header can pull a declaration inside the loop scope
+      -- when the variable is loop-carried (written each iteration, read at top of
+      -- the next). Excluding loop-header blocks forces those defs into the
+      -- function-top declaration block, which is always in scope.
       let scopeSafe := ¬ (whileHdr.get? db).isSome ∧ ¬ (doWhileHdr.get? db).isSome
+                       ∧ ¬ loopHeaders.contains db
       let uses := (useIdxByName.get? nm).getD []
       if okLocal nm ∧ ¬ pm.names.contains nm ∧ scopeSafe then
         if uses.all (fun u => idx2blk[u]! == db ∧ u > di) then s := s.insert nm
@@ -751,6 +759,48 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     -- straight-line statements
     for q in [bb.lo:stmtHi] do
       match stmtOf q with | some s => body := body ++ pad ++ s ++ "\n" | none => pure ()
+    -- Loop-carried assignment injection: for each def (i, R_new) inside a loop block,
+    -- if canonReg(R_new) has an earlier def R_old in a DIFFERENT (pre-loop) block,
+    -- and R_old is read somewhere in the loop body before the def (loop-carried use),
+    -- emit `R_old = R_new;` so the next iteration sees the updated value.
+    -- This handles the missing-phi problem for simple loops without phi nodes.
+    if loopHeaders.contains b then
+      let loopDefs := defSites.filter (fun (i, _) => i >= bb.lo ∧ i < stmtHi)
+      -- Group by canonical register; only inject for the LAST def of each reg in the loop.
+      -- Multiple defs of the same reg in one iteration (e.g. two eax writes) should
+      -- carry only the final value to the next iteration.
+      let loopCanons := (loopDefs.toList.map (fun (_, r) => canonReg r)).eraseDups
+      for canon in loopCanons do
+        let lastLoopDef := (loopDefs.filter (fun (_, r) => canonReg r == canon)).back?
+        match lastLoopDef with
+        | none => pure ()
+        | some (i, r_new) =>
+          let canonNew := canonReg r_new
+          -- Find the latest def of the same canonical register BEFORE the loop block.
+          let preLoopDef := (defSites.filter (fun (j, r_pre) =>
+            canonReg r_pre == canonNew ∧ j < bb.lo)).back?
+          -- Also check param registers: if canonNew is a parameter register (in pm.regs),
+          -- the pre-loop "def" is the param itself (a0, a1, …).
+          let nmNew := cName ((ssaName.get? i).getD r_new)
+          let (nmOld, paramCarry) : String × Bool :=
+            match preLoopDef with
+            | some (preIdx, _) =>
+              (cName ((ssaName.get? preIdx).getD r_new), false)
+            | none =>
+              -- No pre-loop def: check if this is a parameter register being clobbered.
+              -- No pre-loop def: check if this is a SysV parameter register being clobbered.
+              match sysvParamForReg pm.count (canonNew) with
+              | some paramNm => (paramNm, true)
+              | none => ("", false)
+          let effectiveOld := if nmOld.isEmpty then "" else nmOld
+          if effectiveOld.isEmpty ∨ nmNew == effectiveOld then pure ()
+          else
+            -- Only inject if the pre-loop value IS actually used in the loop body
+            -- (confirms it's loop-carried, not just a fresh def that happens to alias).
+            let oldUsedInBlock := (useIdxByName.get? effectiveOld).getD [] |>.any (fun u =>
+              u >= bb.lo ∧ u < bb.hi)
+            if oldUsedInBlock ∨ paramCarry then
+              body := body ++ pad ++ s!"{effectiveOld} = {nmNew};" ++ "\n"
     -- terminator
     if hasTerm ∧ ¬ termConsumed then
       let isDoTail := match stack with | (1, key, _) :: _ => key == b | _ => false
