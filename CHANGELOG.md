@@ -70,6 +70,32 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
   `simpleLoopFaithful` (nB∈{2,3} do-while loops), `reverse_bits` EQUIVALENT.
   Score: 46/61 EQUIVALENT, SOUNDNESS 0.
 
+## Done — durable decisions and vetoed approaches
+
+- **isqrt must use loop-invariant induction, not a capped oracle.** `isqrt` is in
+  `simpleLoopFaithful` (C manually verified correct) but the dynamic oracle times out
+  at 10s because `isqrt(UINT_MAX)` runs ~65535 iterations. Capping the test range
+  is probabilistic and violates the faithful-or-refuse contract. Correct path:
+  `isqrtIter : Nat → Word → Word` recursive fold + `induction k` + `bv_omega`, as
+  in the existing `addLoop_correct` template in `IL.lean`. Produces a theorem over
+  all 2³² inputs. Do not modify `EquivCheck.lean`.
+- **DAG fuel as static loop bound.** `reachingDefsB`/`resolveReachingDef` accept a
+  `fuel` parameter to satisfy Lean 4's totality checker. This fuel is a proven upper
+  bound on walk depth, not a heuristic. For loops whose trip count is statically
+  bounded (isqrt: ≤65535 iterations), the correct Lean statement uses that bound as
+  the induction bound — not as an oracle test-input cap. A theorem is universal; a
+  capped oracle test is probabilistic.
+- **Graceful degradation vetoed.** Emitting partial C with `/* unmodeled */` comments
+  violates rule I0 (faithful-or-refuse). A function with silent gaps looks correct,
+  compiles, and buries wrong behaviour where refusal would have surfaced it. The
+  `--unsafe` flag with its explicit "NOT faithful" banner is the correct safety valve.
+  See TOMBSTONES.md.
+- **Predicate direction rule for guarded-loop emit.** ZF-based branches (`je`/`jz`):
+  `predOf` = test value; branch-taken = `!predOf`. Comparison-based branches
+  (`jbe`/`jae` etc.): `predOf` = taken condition. Guard emit must check branch mnemonic
+  to select the right sign. Normal forward-if always uses `if (!predOf)` correctly
+  because both cases produce consistent not-taken semantics that way.
+
 ## Done — formal IL track (machine-checked, `bv_decide`)
 
 - `FlowrefDecompiler/IL.lean` — BitVec 32 SSA IL; per-construct correctness +
