@@ -39,7 +39,8 @@ while IFS=$'\t' read -r function source object arch symbol_vaddr file_offset reg
   fi
 
   t0=$(date +%s%3N)
-  verdict="$($here/equiv.sh "$object" "$arch" "$symbol_vaddr" "$file_offset" "$region_vaddr" "$size_hex" 2>/dev/null \
+  verdict="$(FLOWREF_EQUIV_TIMEOUT="${FLOWREF_EQUIV_TIMEOUT:-120}" \
+    $here/equiv.sh "$object" "$arch" "$symbol_vaddr" "$file_offset" "$region_vaddr" "$size_hex" 2>/dev/null \
     | awk '{print $1; exit}' || true)"
   t1=$(date +%s%3N)
 
