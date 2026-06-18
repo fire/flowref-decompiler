@@ -30,14 +30,33 @@ Current score: **46/61 EQUIVALENT, SOUNDNESS 0.**
    full oracle on russian_mul/sum_to_n/fib_iter to confirm they are INCOMPARABLE
    (NOT the new class), then only then add sum_to_n/factorial/etc. to the gate.
 
-2. **isqrt oracle timeout.** isqrt is already in `simpleLoopFaithful` and the C is
-   correct (manually verified), but the oracle times out at 10s because the plausible
-   search hits n≈4B → 65535 iterations. Fix: in `EquivCheck.lean`, add a smarter
-   boundary battery that caps the search range to `sqrt(UINT_MAX)` for functions
-   whose loop count is data-dependent and bounded by the square root of the input.
-   Alternatively: use the plausible witness DAG's back-edge count to bound the input.
-   **Next decisive action:** patch `EquivCheck.lean` to restrict the test range for
-   loop functions, re-run oracle on isqrt expecting EQUIVALENT.
+2. **isqrt — prove via loop-invariant induction in IL.lean, not a capped oracle.**
+   `isqrt` is already in `simpleLoopFaithful` and the C is manually verified correct,
+   but the dynamic oracle times out: `isqrt(4294967295)` loops ~65535 iterations, and
+   the plausible search cannot exhaust 2³² inputs in 10s (or even 60s). Capping the
+   test range is **wrong** — it is probabilistic thinking that violates the
+   faithful-or-refuse contract and exactly the class of bug that already bit us
+   (see TOMBSTONES.md `isGuardedLoop5`: 10s timeouts masked SOUNDNESS: 3).
+
+   **Why `bv_decide` cannot close this:** `bv_decide` bitblasts a *finite* term.
+   For `times8` (fixed 3-iteration unrolled loop) it works. For `isqrt` the trip
+   count is runtime-symbolic (`⌊√n⌋` iterations), so the term is not finite and
+   `bv_decide` cannot blast it.
+
+   **Correct path — loop-invariant induction (the `addLoop_correct` pattern):**
+   `IL.lean` already proves the template: `addLoop_correct` uses `induction n with`
+   + `bv_omega` for per-step arithmetic. For `isqrt`, the invariant is:
+   `isqrtLoop k = ⌊√(k + init²)⌋` — i.e., after `k` iterations the accumulator
+   equals the integer square root of the initial input. Steps:
+   1. Define `isqrtIter : Nat → Word → Word` as a recursive fold (like `addLoop`).
+   2. State the invariant as a Lean theorem on `isqrtIter`.
+   3. Prove by `induction k` with `bv_omega` closing the per-step obligation.
+   4. Connect the IL `SProg` evaluation to `isqrtIter` via `fromSoundSProg`.
+   5. This yields a machine-checked theorem over all 2³² inputs — stronger than
+      any dynamic oracle, and provably sound.
+
+   **Next decisive action:** add `isqrtIter` + `isqrtIter_correct` to `IL.lean`,
+   following the `addLoop_correct` pattern exactly. Do not touch `EquivCheck.lean`.
 
 3. **Variable coalescing.** The emitter produces `eax_0`, `eax_1` SSA versioned names.
    For human-readable output, collapse non-overlapping live ranges of the same physical

@@ -22,6 +22,22 @@ see `CHANGELOG.md`). Note: `plausible` is still correct and used for the
 reaching-def witness search, where it hunts for *any* counterexample to existence,
 not value-equivalence over the full input range.
 
+## Capping the dynamic oracle range for symbolic loops — vetoed
+
+Proposed for `isqrt`: restrict the plausible/`equiv.sh` input battery to the range
+`[0, sqrt(UINT_MAX)]` to avoid 65535-iteration runs timing out.
+
+**Why this is wrong:** it reduces a universal statement over 2³² inputs to a
+probabilistic one over ~65535. It is precisely the mindset that caused the
+`isGuardedLoop5` SOUNDNESS: 3 regression — 10s timeouts hid bugs that only
+manifest at specific large inputs (see above). Capping the range for `isqrt`
+would produce a false EQUIVALENT for any bug that only triggers near n=4B.
+
+**Correct path:** the `addLoop_correct` proof in `IL.lean` shows the template.
+For a symbolic-bound loop, state a loop invariant and prove by `induction n with`
++ `bv_omega` for per-step arithmetic. This yields a machine-checked theorem over
+all 2³² inputs — not just the tested subset. See OPEN_GAPS.md item 2.
+
 ## Graceful degradation via `/* unmodeled */` inline comments — vetoed
 
 Proposed: when a function contains unmodeled instructions, emit the body anyway
