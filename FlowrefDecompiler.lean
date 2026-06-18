@@ -590,8 +590,10 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
             let t := s!"(({lx}) & ({ly}))"
             if ins.mn == "je" ∨ ins.mn == "jz" then s!"({t} == 0)"
             else if ins.mn == "jne" ∨ ins.mn == "jnz" then s!"({t} != 0)"
-            else if ins.mn == "js" then s!"((int32_t)({t}) < 0)"
-            else if ins.mn == "jns" then s!"((int32_t)({t}) >= 0)"
+            else if ins.mn == "js" ∨ ins.mn == "jl" then s!"((int32_t)({t}) < 0)"
+            else if ins.mn == "jns" ∨ ins.mn == "jge" then s!"((int32_t)({t}) >= 0)"
+            else if ins.mn == "jle" then s!"((int32_t)({t}) <= 0)"
+            else if ins.mn == "jg" then s!"((int32_t)({t}) > 0)"
             else t
           else
             let op := if ins.mn == "je" ∨ ins.mn == "jz" then "=="

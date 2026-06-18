@@ -10,4 +10,4 @@ TRAINING_FUNCS="id32 add2 umax umin abs_diff gray_code avg_floor \
        sel_nz is_zero cmp_lt cmp_le cmp_eq nonzero is_even in_range branch_select branch_select_slt branch_phi_add branch_phi_twouse nested_select_cfg \
        russian_mul abs_int signed_lt \
        sum_to_n factorial fib_iter popcount log2_floor reverse_bits digit_count \
-       isqrt collatz_steps signed_loop_branch zero_ext_loop"
+       isqrt collatz_steps signed_loop_branch loop_signed_jg zero_ext_loop"
