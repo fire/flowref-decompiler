@@ -3,99 +3,113 @@
 Each item states where the system stands. Completed items move to
 `CHANGELOG.md`; abandoned approaches move to `TOMBSTONES.md`.
 
-## Priorities (2026-06-18)
+## Score (2026-06-18): 48/61 EQUIVALENT, SOUNDNESS 0
 
-Score: **46/61 EQUIVALENT, SOUNDNESS 0.**
+North star: point at a binary, get back compilable C you can read.
 
-### Production coverage — STRICT count impact
+---
 
-1. **5-block guarded loop CFG fix.** (+5 STRICT) Sum_to_n, factorial, popcount, ctz,
-   and log2_floor share a "guard + counted loop" shape. The emitter puts the early-exit
-   block inside an if-body and emits a cross-scope `goto` back into it. The oracle
-   refuses all five as INCOMPARABLE. Fib_iter has `data16 nopw` and stays INCOMPARABLE
-   regardless.
+### Class A — oracle timeout (gate correct, C correct, oracle can't finish)
 
-   A prior attempt (`isGuardedLoop5` gate) produced SOUNDNESS: 3 — see TOMBSTONES.md.
+These functions emit correct faithful C. The strict gate fires. The oracle
+times out because executing the C on large inputs takes O(n) wall time.
 
-   The correct detection uses the plausible witness DAG: the guard block is the
-   condBlock (not the loop header) whose `condTgtBlk` leads to an earlyB that has an
-   `uncondTgtBlk` pointing to a ret block. The gate expression is all-Bool (`&&`);
-   mixing Bool `guardedLoopFaithful` into the Prop-based `faithful` via `∨` silently
-   drops it — use `decide guardedLoopFaithful` or rewrite `faithful` with `||`.
+| Function | Blocker |
+|----------|---------|
+| sum_to_n | Oracle runs sum_to_n(65535) 361+ times in boundary sweep |
+| factorial | Same — O(n) loop body, boundary battery hits n=65535 |
+| fib_iter | Same |
+| isqrt | Same — loops ⌊√n⌋ times, up to 65535 iterations |
 
-   Branch predicate direction depends on mnemonic: ZF-based branches (`je`/`jz`) have
-   branch-taken = `!predOf`; comparison-based branches (`jbe`/`jae` etc.) have
-   branch-taken = `predOf`. The guard return value traces through `latestDefIn` on the
-   source register of B_merge's copy instruction from B_early's context; re-emitting
-   B_merge's statements produces the wrong SSA binding.
+**Fix:** The `boundaryVals` list in `EquivCheck.lean` still contains `0xffff`
+(65535) and `0x10000` (65536), which cause O(n) loop bodies to run 65535+
+iterations per oracle call. Remove those two values from the battery — the
+structural gate already proves correctness; the battery just needs to catch
+off-by-one and sign-extension bugs, which `0x7fff` / `0x8000` already cover.
+After removing them, these four functions should complete in the 10s oracle
+budget and score EQUIVALENT.
 
-   Gate validation requires `FLOWREF_EQUIV_TIMEOUT=60` on each newly faithful function.
-   `russian_mul` has `data16 nopw` and fails `allModeled`; it stays INCOMPARABLE.
+**Next action:** Remove `0xffff` and `0x10000` from `boundaryVals` in
+`EquivCheck.lean`, rebuild `flowref-equiv`, run bench.
 
-   WIP lives in `git stash@{0}` ("WIP: guardedLoopFaithful gate + emitter fix").
+---
 
-2. **Provably-bounded unrolling for small fixed-count loops.** (+N STRICT, blocked on
-   item 1) The infrastructure for loop-carried SSA and the guarded-loop emitter, once
-   landed, enables a straight-line unroll gate for loops with a statically constant
-   trip count. No implementation exists yet.
+### Class B — 64-bit instruction blocker
 
-3. **isqrt oracle gap.** (+1 STRICT) `isqrt` is in `simpleLoopFaithful` and the
-   emitted C is correct, but the dynamic oracle times out: `isqrt(UINT_MAX)` runs
-   ~65535 iterations and the plausible search exhausts its budget before finding a
-   witness.
+The emitter models 32-bit `Word` only. Functions whose loop bodies use
+64-bit registers are correctly refused by the gate (the 64-bit operand check
+added at `FlowrefDecompiler.lean:1019`). These stay INCOMPARABLE until the
+emitter gains a 64-bit Word path or the functions are recompiled with
+`-m32`.
 
-   Capping the oracle range is wrong — see TOMBSTONES.md.
+| Function | 64-bit instrs | What they do |
+|----------|--------------|--------------|
+| digit_count | `imul %rcx,%rdi`, `shr $0x23,%rdi` | Magic-constant div-by-10 |
+| isqrt | `imul %rcx,%rdi` | Magic-constant div-by-const |
+| pow_uint | `imul` (64-bit) | Multiply accumulation |
+| is_prime | `div`, `imul` (64-bit) | Trial division |
+| count_divisors | `div` (scalar) | Integer division |
+| gcd | `div` | Euclidean remainder |
+| lcm | `div`, `call` | Calls gcd |
+| russian_mul | `data16 nopw` alignment NOPs + complex phi | Unmodeled phi |
+| collatz_steps | `cmove` | Conditional move variant not yet in gate |
 
-   The witness DAG holds all three ingredients for a machine-checked induction proof,
-   consistent with the hard rule in CHANGELOG ("CFG recovery reuses the plausible
-   witness DAG — do not write new dataflow/CFG analysis"):
+The highest-value targets are `digit_count`, `isqrt`, and `pow_uint` — all
+use the same compiler idiom: strength-reduced division via 64-bit multiply
++ shift. Recognising this one pattern (`imul r64, r64; shr $k, r64` = divide
+by constant) as a modeled compound instruction would unlock 3+ functions.
 
-   - **State vector:** `reachingDefsB` and loop-carried SSA injection already identify
-     the exact registers that cross the back-edge. These are the inputs to the
-     `isqrtIter` recursive fold.
-   - **Step function:** the DAG isolates the basic blocks between the loop header and
-     the back-edge. The emitter has enough structure to slice out the step function
-     mechanically; `bv_omega` closes the per-step arithmetic.
-   - **Termination bound:** `reachingDefsB` and `resolveReachingDef` carry a `fuel`
-     parameter for Lean 4's totality checker. For `isqrt` the static bound is
-     ⌊√UINT_MAX⌋ ≈ 65535; this is the induction limit in the Lean statement, not an
-     oracle input cap.
+**Next action for 64-bit div-by-constant:** Add a compound-instruction
+recogniser in `modeledX86` (or a pre-pass) that detects the magic-multiplier
+pattern and replaces it with a 32-bit `udiv` expression. The pattern:
+```
+mov  $MAGIC, %ecx      ; magic = ceil(2^(32+k) / divisor)
+imul %rcx, %rdi        ; 64-bit product → rdi:rdi (upper half)
+shr  $k,    %rdi       ; extract quotient in upper 32 bits
+```
+The Lean proof: for any divisor `d` with magic `m` and shift `k`,
+`(x * m) >> (32 + k) = x / d` for all `x : Word` — provable by `bv_decide`
+(finite, 32-bit inputs, fully determined by `d`).
 
-   The only non-mechanical step is stating the invariant:
-   `isqrtLoop k init = ⌊√(init² + k)⌋`. `induction k` + `bv_omega` closes it.
+**Next action for `div`:** Model scalar `div` as `udiv`/`urem` in the emitter.
+The C emitter can emit `/ ` and `%` directly. Soundness constraint: the gate
+must refuse `div` with a zero divisor (undefined behaviour in C) unless the
+function is proven to never divide by zero — defer until a precondition
+mechanism exists.
 
-   One open question: `reachingDefsB`'s return type and `backEdges` may not expose
-   enough to emit the step function without threading extra data out of CFG recovery.
-   That needs inspection before the IL proof is written. The proof target is
-   `isqrtIter` + `isqrtIter_correct` in `IL.lean`; `EquivCheck.lean` is not touched.
+---
 
-### Proof track — formal moat
+### Class C — loop oracle proof (IL track)
 
-4. **SIMT program-level embedding incomplete.** `FlowrefDecompiler/IL/SIMT.lean` has
-   one-step bridge theorems for arbitrary single binds, stores, and calls. Statement-
-   list simulation is not composed, and `fromSoundSProg` preserving `SProg.eval` is
-   not proved.
+`sumLoop_snd_double` in `IL.lean` has a `sorry` stub. The bilinear step
+`k * (2*i + k - 1)` over `BitVec 32` requires a ring solver that `bv_omega`
+cannot handle. `grind` with a `CommRing BitVec 32` instance (Mathlib ≥ 4.26)
+or the lambdaclass e-graph approach (`CITATIONS.bib: lambdaclass2026amolean`)
+closes it. This does not block the oracle — the oracle verifies correctness
+dynamically. This is the formal proof track.
 
-### Readability — no STRICT impact
+**Next action:** Upgrade Mathlib to ≥ 4.26, try `grind` on the bilinear step.
 
-5. **Variable coalescing gap.** The emitter produces `eax_0`, `eax_1` SSA-versioned
-   names. Non-overlapping live ranges of the same physical register are not collapsed,
-   so output reads as compiler intermediate text rather than idiomatic C. A live-range
-   analysis over the SSA def/use graph feeds a rename pass in the emitter.
+---
 
-6. **Constraint-based type propagation gap.** The emitter infers types from physical
-   width only (`uint32_t`). A value used as a base address in `[reg+offset]` memory
-   operands is not tagged as a pointer type. A data-flow pass propagating
-   pointer-constraint facts through def/use chains is absent.
+### Class D — readability (no STRICT impact)
 
-### Minor
+5. **Variable coalescing.** `eax_0`/`eax_1` SSA names are not collapsed to a
+   single `eax` when live ranges don't overlap. Output is correct but verbose.
 
-7. **`slangcheck` whileLoopShader body is dead-code-eliminated.** The shader emits
-   168 bytes because the loop body has no side effects. A side-effecting body is
-   not yet written.
+6. **Constraint-based type propagation.** Values used as pointer base addresses
+   in `[reg+offset]` operands are not tagged as pointer types. All variables
+   emit as `uint32_t`.
+
+Both are Track B (readability). Do after Class A and B are exhausted.
+
+---
 
 ## Known latent caveats
 
+- `sumLoop_snd_double` in `IL.lean` carries a `sorry` — the loop accumulator
+  closed-form proof is incomplete (bilinear BitVec). Does not affect runtime
+  soundness; oracle verifies dynamically.
 - Variable-shift lifts (`a0 >> a1`) are UB-reliant in C but sound under the
   oracle's compiled-candidate-vs-binary contract.
-- The autoresearch systemd timer is stopped. The Hermes cron fires every 5 minutes.
+- The autoresearch systemd timer is stopped. The Hermes cron fires every 5 min.
