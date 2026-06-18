@@ -42,6 +42,34 @@ INCOMPARABLE     can't be compared yet (unresolved call to another sub, or a
                  non-void signature flowref cannot model — see Limits)
 ```
 
+## Materializing the training-set binaries
+
+`algo-bench.sh` compiles every self-authored fixture to a temporary object and
+deletes it after the oracle run. To keep the binary side around for inspection,
+reproduce it with:
+
+```bash
+./build-training-binaries.sh
+```
+
+This writes ignored artifacts under `out/training-binaries/`:
+
+* `*.o` — one relocatable ELF object per training fixture.
+* `manifest.tsv` — exact region metadata for explicit-region flowref/oracle runs:
+  `function`, `source`, `object`, `arch`, `symbol_vaddr`, `file_offset`,
+  `region_vaddr`, `size_hex`, `size_dec`.
+
+Example:
+
+```bash
+./build-training-binaries.sh
+.lake/build/bin/flowref-decompiler decompile \
+  decompile-bench/out/training-binaries/id32.o x64 0x0 0x40 0x0 0x3 --json
+```
+
+The generated objects are not tracked; the C/assembly fixtures plus the build
+script are the reproducible training-set source of truth.
+
 ## Demonstration — `equiv-demo.sh` (runnable now, no network)
 
 ```text
@@ -62,23 +90,19 @@ flowref can model today.
 
 ## Honest limits (what "win" does *not* yet cover)
 
-The proof currently holds for **parameterless, register-only leaf functions**.
-Three real gaps stand between this and equivalence on arbitrary Decompile-Bench
-rows — each is a concrete next step, not hand-waving:
+The oracle currently proves the self-authored single-block leaf/flag/select
+training fixtures plus compact branch-select assembly fixtures. The remaining
+real gaps toward arbitrary Decompile-Bench rows are tracked in `../OPEN_GAPS.md`:
 
-1. **No parameter / calling-convention model.** flowref emits `sub_(void)`, so
-   functions that take arguments are `INCOMPARABLE` (the oracle cannot feed them
-   inputs). Modelling the SysV/cdecl ABI would let the oracle randomised-
-   differential-test input→output. *This is the main blocker.*
-2. **x86 / PowerPC pattern families.** Decoding is universal — `x64` and every
-   other Capstone target are wired (`capstoneSpec?`), so the bins decode
-   natively. But the kernel's def/use/return *patterns* are written for x86 and
-   PowerPC; other targets decode + emit a compilable stub but recover little
-   data-flow until a pattern family is added. Sub-register aliasing
-   (`eax`⊂`rax`) is also not yet modelled, so some x64 returns fall back to the
-   base local.
-3. **Leaf functions only.** A call to another `sub_` is `INCOMPARABLE` until the
-   callee is provided or stubbed.
+1. **Production memory.** The formal IL proves loads/stores, but strict
+   production decompilation still refuses most real memory operands until the
+   emitted C shape is oracle-proven on binaries.
+2. **General calls.** The formal IL models calls through `CallEnv`, but production
+   still refuses call-containing functions except narrow forwarding cases.
+3. **General control flow.** Compact branch diamonds are covered; loops and wider
+   CFG structuring remain `INCOMPARABLE` rather than guessed.
+4. **Architecture pattern families.** Decoding is universal, but data-flow and
+   return-value recovery patterns are mature primarily for x86/x64 and PowerPC.
 
 The verdict vocabulary is deliberately honest: `INCOMPARABLE` is reported
 distinctly from `NOT-EQUIVALENT`, so the harness never overstates a "win."

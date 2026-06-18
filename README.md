@@ -67,8 +67,8 @@ chains of any length, add/sub-carry and `test`-ZF conditional moves, and `setcc`
 ```text
 $ ./decompile-bench/algo-bench.sh
   …
-  STRICT  : 44/60 proven EQUIVALENT (machine-checked)
-  UNSAFE  : 60/60 emit C that compiles (best-effort coverage signal)
+  STRICT  : 45/61 proven EQUIVALENT (machine-checked)
+  UNSAFE  : 61/61 emit C that compiles (best-effort coverage signal)
   SOUNDNESS: 0 violations (no strict lift was wrong).
 
 $ ./decompile-bench/equiv-demo.sh
@@ -83,11 +83,11 @@ by `bv_decide`, lifted from real decoded instructions
 emitted shader to **SPIR-V in-process** and proves data-parallel kernel correctness.
 
 Faithful C is the **bar, not a bonus.** `flowref decompile` emits C **only** for
-the class it can lift exactly — a straight-line, register-only leaf. For anything
-else (control flow, memory, calls) it is a **hard error**: a non-zero exit and
-**nothing on stdout** — flowref never prints C it cannot stand behind. Closing
-those gaps (parameters, memory, full control flow) is the job, not an excuse; the
-current edge is in *Limitations*.
+the class it can lift exactly — the current single-block leaf/flag/select class
+plus narrow branch-select bridges. For anything else (general control flow,
+memory, calls) it is a **hard error**: a non-zero exit and **nothing on stdout** —
+flowref never prints C it cannot stand behind. Closing those gaps is the job, not
+an excuse; the current edge is in *Limitations*.
 
 ```text
 $ flowref decompile a.out has_a_loop ; echo "exit=$?"
@@ -131,15 +131,15 @@ dependency rather than this repo.
 ## Limitations
 
 Faithful output is the standard. Today flowref *meets* it for the entire
-**single-basic-block** leaf/flag/select class (above) and two narrow, proven
+**single-basic-block** leaf/flag/select class (above) and narrow, proven
 multi-block bridges: compact forward branch diamonds that select either the
 return register or a merge φ value used by later modeled straight-line code.
 Everything beyond that narrow branch-select shape — general branches,
 loops, **memory**, or **calls** — is an **open gap, not a finished feature**, and
 `decompile` refuses it with a hard error rather than emit something unverified.
 `xref` and `list` still work on any binary. The live edge — what is being modeled
-next and why — is tracked in `OPEN_GAPS.md` (current #1: branch→select lifting,
-reusing the plausible witness DAG); completed work and durable rules are in
+next and why — is tracked in `OPEN_GAPS.md` (current #1: single-block memory in
+production); completed work and durable rules are in
 `CHANGELOG.md`, and abandoned approaches in `TOMBSTONES.md`.
 
 ## License
