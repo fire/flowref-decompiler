@@ -1012,7 +1012,18 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     if !(a == .x86) || hasCall || hasMemOp then false
     else if !insns.all (fun i => modeledX86 i.mn || (cbtX i).isSome) then false
     else if !cmovsModeled || !setccModeled then false
-    else if insns.any (fun i => i.mn == "imul" || i.mn == "mul") then false
+    -- Exclude functions using 64-bit registers in operands (e.g. digit_count uses
+    -- imul %rcx,%rdi / shr $0x23,%rdi). These are not faithfully modeled by
+    -- the 32-bit Word IL; the 64-bit multiply+shift pattern for division-by-constant
+    -- produces wrong results when truncated to uint32_t.
+    else if insns.any (fun i =>
+      -- Skip nop/data alignment instructions — their operand address expressions
+      -- contain 64-bit register names (e.g. nopl 0x0(%rax)) but are no-ops.
+      if i.mn.startsWith "nop" || i.mn.startsWith "data" then false
+      else
+        let regs64 := ["rax","rbx","rcx","rdx","rdi","rsi","rbp","rsp",
+                       "r8","r9","r10","r11","r12","r13","r14","r15"]
+        regs64.any (fun r => (i.ops.splitOn r).length > 1)) then false
     -- Exclude functions with phi variables: loop bodies where a value is selected
     -- from multiple predecessor paths are not yet faithfully modeled by this gate.
     -- Russian_mul has eax_phi; sum_to_n/factorial/popcount do not.
