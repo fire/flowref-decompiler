@@ -8,8 +8,9 @@ TimeoutStartSec=infinity
 WorkingDirectory=/chibifire-assets-2026w24/files/flowref-decompiler
 Environment="HOME=/home/ernest.lee"
 Environment="PATH=/home/linuxbrew/.linuxbrew/bin:/home/ernest.lee/.elan/bin:/home/ernest.lee/.pixi/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-Environment="FLOWREF_RESEARCH_BUDGET=600"
-Environment="FLOWREF_EQUIV_TIMEOUT=120"
+Environment="FLOWREF_RESEARCH_BUDGET=280"
+Environment="FLOWREF_EQUIV_TIMEOUT=10"
+Environment="BENCH_JOBS=16"
 ExecStart=/bin/bash -c \
   "RUN_ID=systemd-$(date -u +%%Y%%m%%dT%%H%%M%%SZ) \
    FLOWREF_RESEARCH_RUN_ID=$RUN_ID \

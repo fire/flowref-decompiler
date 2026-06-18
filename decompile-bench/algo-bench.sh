@@ -8,52 +8,100 @@
 #            lift — EQUIVALENT (proven) / INCOMPARABLE (refused, never wrong).
 #   UNSAFE : whether flowref's --unsafe best-effort C at least compiles
 #            (syntax-correct C), a coverage signal for the refused class.
+#
+# Parallelism: BENCH_JOBS (default: nproc) oracle workers run concurrently.
+# Each function compiles, runs the oracle, and writes a single-line result to
+# a temp dir; the collector merges them in FUNCS order at the end.
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 FR="${FLOWREF:-$here/../.lake/build/bin/flowref-decompiler}"
 CC="${CC:-cc}"
+JOBS="${BENCH_JOBS:-$(nproc)}"
+# Fast default timeout: INCOMPARABLE functions always exhaust the oracle anyway;
+# EQUIVALENT ones finish in under 2s. Override with FLOWREF_EQUIV_TIMEOUT=120
+# for targeted single-function checks on new loop classes.
+export FLOWREF_EQUIV_TIMEOUT="${FLOWREF_EQUIV_TIMEOUT:-10}"
 SRCDIR="$here/algorithms"
 ASMDIR="$here/asm"
 . "$here/training-functions.sh"
 
-# Order mirrors the structural grouping of the source set: leaves, bit tricks /
-# multi-cmov, counted loops, data-dependent loops, then a call. Keep in sync with
-# the files in algorithms/ (each file defines exactly the function it is named).
 FUNCS="$TRAINING_FUNCS"
 
+# Scratch dir — one file per function: "<verdict>\t<uc>"
+TMPDIR="$(mktemp -d /tmp/algo-bench.XXXXXX)"
+trap 'rm -rf "$TMPDIR"' EXIT
+
+# Worker: compile, oracle, unsafe-compile for a single function.
+run_one() {
+  local f="$1"
+  local src="$SRCDIR/$f.c"
+  [ -f "$src" ] || src="$ASMDIR/$f.S"
+  if [ ! -f "$src" ]; then
+    echo "source_not_found	no" > "$TMPDIR/$f"
+    return
+  fi
+  local obj
+  obj="$(mktemp /tmp/algo.$f.XXXXXX.o)"
+  if ! "$CC" -O1 -fcf-protection=none -fno-stack-protector -c "$src" -o "$obj" 2>/dev/null; then
+    echo "cannot_compile	no" > "$TMPDIR/$f"
+    rm -f "$obj"
+    return
+  fi
+
+  read TVMA TOFF < <(readelf -SW "$obj" | awk '/[ \t]\.text[ \t]/{for(i=1;i<=NF;i++)if($i=="PROGBITS"){print "0x"$(i+1),"0x"$(i+2);exit}}')
+  read SVAL SZDEC < <(readelf -sW "$obj" | awk -v s="$f" '$8==s{print "0x"$2, $3}')
+  if [ -z "${SVAL:-}" ]; then
+    echo "symbol_not_found	no" > "$TMPDIR/$f"
+    rm -f "$obj"
+    return
+  fi
+  local SSIZE
+  SSIZE=$(printf "0x%x" "$SZDEC")
+  local FOFF
+  FOFF=$(printf "0x%x" $((SVAL - TVMA + TOFF)))
+
+  local verdict
+  verdict="$("$here/equiv.sh" "$obj" x64 "$SVAL" "$FOFF" "$SVAL" "$SSIZE" 2>/dev/null | awk '{print $1; exit}')"
+
+  local uc="no"
+  if "$FR" decompile "$obj" x64 "$SVAL" "$FOFF" "$SVAL" "$SSIZE" --unsafe 2>/dev/null \
+       | "$CC" -xc -std=c11 -w -fsyntax-only - 2>/dev/null; then
+    uc="yes"
+  fi
+
+  echo "${verdict:-?}	$uc" > "$TMPDIR/$f"
+  rm -f "$obj"
+}
+
+export -f run_one
+export TMPDIR CC FR here SRCDIR ASMDIR
+
+# Run all workers — up to JOBS concurrent.
+printf "%s\n" $FUNCS | xargs -P "$JOBS" -I{} bash -c 'run_one "$@"' _ {}
+
+# Collect results in FUNCS order and tally.
 total=0; proven=0; unsafe_ok=0; violations=0
 printf "%-15s %-14s %s\n" "function" "STRICT" "UNSAFE-compiles"
 printf "%-15s %-14s %s\n" "--------" "------" "---------------"
 for f in $FUNCS; do
-  src="$SRCDIR/$f.c"
-  [ -f "$src" ] || src="$ASMDIR/$f.S"
-  [ -f "$src" ] || { printf "%-15s %s\n" "$f" "(source not found)"; continue; }
-  obj="$(mktemp /tmp/algo.$f.XXXXXX.o)"
-  if ! "$CC" -O1 -fcf-protection=none -fno-stack-protector -c "$src" -o "$obj" 2>/dev/null; then
-    printf "%-15s %s\n" "$f" "(cannot compile)"; rm -f "$obj"; continue
+  result_file="$TMPDIR/$f"
+  if [ ! -f "$result_file" ]; then
+    printf "%-15s %s\n" "$f" "(no result)"; continue
   fi
-
-  # .text section file offset (sh_offset), from section headers — metadata only.
-  read TVMA TOFF < <(readelf -SW "$obj" | awk '/[ \t]\.text[ \t]/{for(i=1;i<=NF;i++)if($i=="PROGBITS"){print "0x"$(i+1),"0x"$(i+2);exit}}')
-  # readelf -s prints Value in hex but Size in DECIMAL; convert the size to hex.
-  read SVAL SZDEC < <(readelf -sW "$obj" | awk -v s="$f" '$8==s{print "0x"$2, $3}')
-  [ -n "${SVAL:-}" ] || { printf "%-15s %s\n" "$f" "(symbol not found)"; rm -f "$obj"; continue; }
-  SSIZE=$(printf "0x%x" "$SZDEC")
-  total=$((total+1))
-  FOFF=$(printf "0x%x" $((SVAL - TVMA + TOFF)))
-
-  verdict="$("$here/equiv.sh" "$obj" x64 "$SVAL" "$FOFF" "$SVAL" "$SSIZE" 2>/dev/null | awk '{print $1; exit}')"
+  IFS=$'\t' read -r verdict uc < "$result_file"
   case "$verdict" in
-    EQUIVALENT)     proven=$((proven+1));;
-    NOT-EQUIVALENT) violations=$((violations+1));;   # SOUNDNESS BUG: strict emitted wrong C
+    source_not_found|cannot_compile|symbol_not_found)
+      printf "%-15s %s\n" "$f" "($verdict)"; continue ;;
   esac
-
-  if "$FR" decompile "$obj" x64 "$SVAL" "$FOFF" "$SVAL" "$SSIZE" --unsafe 2>/dev/null \
-       | "$CC" -xc -std=c11 -w -fsyntax-only - 2>/dev/null; then uc="yes"; unsafe_ok=$((unsafe_ok+1)); else uc="no"; fi
-
-  printf "%-15s %-14s %s\n" "$f" "${verdict:-?}" "$uc"
-  rm -f "$obj"
+  total=$((total+1))
+  case "$verdict" in
+    EQUIVALENT)     proven=$((proven+1)) ;;
+    NOT-EQUIVALENT) violations=$((violations+1)) ;;
+  esac
+  [ "$uc" = "yes" ] && unsafe_ok=$((unsafe_ok+1))
+  printf "%-15s %-14s %s\n" "$f" "$verdict" "$uc"
 done
+
 echo
 echo "STRICT  : $proven/$total proven EQUIVALENT (machine-checked)"
 echo "UNSAFE  : $unsafe_ok/$total emit C that compiles (best-effort coverage signal)"
