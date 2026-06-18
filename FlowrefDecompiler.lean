@@ -215,7 +215,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
                                ∨ i.mn == "neg" ∨ i.mn == "not"
                                ∨ i.mn == "adc" ∨ i.mn == "sbb"
                                ∨ i.mn == "ror" ∨ i.mn == "rol" ∨ i.mn == "bswap"
-                               ∨ i.mn == "bsf" ∨ i.mn == "rep bsf" ∨ i.mn == "tzcnt" ∨ i.mn == "bsr")
+                               ∨ i.mn == "bsf" ∨ i.mn == "rep bsf" ∨ i.mn == "tzcnt" ∨ i.mn == "bsr" ∨ i.mn == "lzcnt")
                                ∧ ¬ (firstTok i).any (· == '[')
                           then some (firstTok i) else none
                 | _    => none
@@ -775,7 +775,8 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     | _, _ => none
 
   -- `bsf`/`tzcnt dst, src` returns the least significant set-bit index. `bsr`
-  -- returns the most significant set-bit index. The training fixtures force a
+  -- returns the most significant set-bit index, and `lzcnt` returns the leading
+  -- zero count. The training fixtures force a
   -- nonzero source with `x | 1`, matching GCC's builtin lowering while avoiding
   -- the architectural zero-input undefined result.
   let bsfRhs : Nat → Ins → List (String × String) → Option String := fun q ins subs =>
@@ -784,6 +785,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     | "rep bsf", [_, src] => some s!"(uint32_t)__builtin_ctz({subOf q subs src})"
     | "tzcnt", [_, src] => some s!"(uint32_t)__builtin_ctz({subOf q subs src})"
     | "bsr", [_, src] => some s!"(uint32_t)(31u - __builtin_clz({subOf q subs src}))"
+    | "lzcnt", [_, src] => some s!"(uint32_t)__builtin_clz({subOf q subs src})"
     | _, _ => none
 
   -- `bswap r32` reverses the byte order of a 32-bit register. Render through the
@@ -846,7 +848,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
           let rhs0 := if ins.mn.startsWith "cmov" then (cmovRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
                       else if ins.mn.startsWith "set" then (setccRhs q ins).getD (applyCdecl (renderExprC a ins subs))
                       else if ins.mn == "ror" ∨ ins.mn == "rol" then (rotateRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
-                      else if ins.mn == "bsf" ∨ ins.mn == "rep bsf" ∨ ins.mn == "tzcnt" ∨ ins.mn == "bsr" then (bsfRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
+                      else if ins.mn == "bsf" ∨ ins.mn == "rep bsf" ∨ ins.mn == "tzcnt" ∨ ins.mn == "bsr" ∨ ins.mn == "lzcnt" then (bsfRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
                       else if ins.mn == "bswap" then (bswapRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
                       else if ins.mn == "adc" ∨ ins.mn == "sbb" then (carryRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
                       else if ins.mn == "mul" then (mulRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
@@ -1116,7 +1118,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- omit them, so both are handled in the production layer above.
   let modeledX86 : String → Bool := fun mn =>
     ["mov", "movzx", "movsx", "movsxd", "lea", "add", "sub", "and", "or", "xor",
-     "shl", "sal", "shr", "sar", "ror", "rol", "bswap", "bsf", "rep bsf", "tzcnt", "bsr", "adc", "sbb", "mul", "imul", "neg", "not", "inc", "dec",
+     "shl", "sal", "shr", "sar", "ror", "rol", "bswap", "bsf", "rep bsf", "tzcnt", "bsr", "lzcnt", "adc", "sbb", "mul", "imul", "neg", "not", "inc", "dec",
      "ret", "nop", "endbr64", "cmp", "test",
      -- xchg ax,ax / xchg rax,rax: 2/3-byte alignment NOPs. Memory xchg is
      -- blocked by hasMemOp (contains "[").
