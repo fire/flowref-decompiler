@@ -830,8 +830,8 @@ The proven IL above is the sound core we actually rely on today. This namespace
 is the wider target shape requested for the tinygrad-style architecture: every
 Capstone adapter should lower into one explicit executable machine rather than
 growing per-architecture decompilers. It is deliberately broader than the current
-sound fragment; the theorems below are only placeholder shape witnesses until
-real source-ISA and render semantics are connected.
+sound fragment; the theorems below pin down concrete step semantics while full
+source-ISA adapter and renderer refinement remain open.
 -/
 
 namespace Complete
@@ -941,23 +941,61 @@ def run (args : List Value) : List CStmt → State → State
   | [],      st => st
   | x :: xs, st => run args xs (step args st x)
 
-/-- Placeholder shape witness for the future adapter-soundness theorem. This is
-not a semantic soundness claim: source ISA semantics are not formalized here yet. -/
-theorem adapter_contract_sound_stub
-    (_archName : String) (_srcInsn : String) (_lowered : CProgram) :
-    True := by
-  trivial
+/-- Register assignment updates exactly the named architectural register. -/
+theorem step_assignReg_reads_written
+    (args : List Value) (st : State) (r : String) (e : CExpr) :
+    (step args st (.assignReg r e)).regs r = evalExpr args st e := by
+  simp [step]
 
-/-- Placeholder shape witness for future refinement from the currently proved
-`SProg` fragment. The real proof still needs an embedding/simulation relation. -/
-theorem complete_refines_sound_core_stub (_p : SProg) : True := by
-  trivial
+/-- Register assignment leaves every other architectural register untouched. -/
+theorem step_assignReg_preserves_other
+    (args : List Value) (st : State) (r q : String) (e : CExpr) (h : q ≠ r) :
+    (step args st (.assignReg r e)).regs q = st.regs q := by
+  simp [step, h]
 
-/-- Placeholder shape witness for future complete-IL render correctness. The real
-proof still needs complete control-flow, syscall, trap, and memory-event render
-semantics. -/
-theorem complete_render_correct_stub (_p : CProgram) : True := by
-  trivial
+/-- Temporary assignment updates exactly the named SSA temporary. -/
+theorem step_assignTmp_reads_written
+    (args : List Value) (st : State) (i : Nat) (e : CExpr) :
+    (step args st (.assignTmp i e)).tmps i = evalExpr args st e := by
+  simp [step]
+
+/-- Flag assignment updates exactly the named architectural flag from the
+nonzero value of the evaluated expression. -/
+theorem step_assignFlag_reads_written
+    (args : List Value) (st : State) (f : String) (e : CExpr) :
+    (step args st (.assignFlag f e)).flags f = ((evalExpr args st e).bits ≠ 0) := by
+  simp [step]
+
+/-- Flag assignment leaves every other architectural flag untouched. -/
+theorem step_assignFlag_preserves_other
+    (args : List Value) (st : State) (f g : String) (e : CExpr) (h : g ≠ f) :
+    (step args st (.assignFlag f e)).flags g = st.flags g := by
+  simp [step, h]
+
+/-- Store writes the evaluated value at the evaluated address in byte memory. -/
+theorem step_store_reads_written
+    (args : List Value) (st : State) (addr val : CExpr) :
+    (step args st (.store addr val)).mem (evalExpr args st addr).bits = evalExpr args st val := by
+  simp [step]
+
+/-- Store leaves every other byte-addressed memory cell untouched. -/
+theorem step_store_preserves_other
+    (args : List Value) (st : State) (addr val : CExpr) (a : Nat)
+    (h : a ≠ (evalExpr args st addr).bits) :
+    (step args st (.store addr val)).mem a = st.mem a := by
+  simp [step, h]
+
+/-- Unconditional branch sets the program counter to the evaluated target. -/
+theorem step_branch_sets_pc (args : List Value) (st : State) (target : CExpr) :
+    (step args st (.branch target)).pc = (evalExpr args st target).bits := by
+  rfl
+
+/-- Conditional branch selects the true or false target by the evaluated guard. -/
+theorem step_cbranch_sets_pc
+    (args : List Value) (st : State) (cond yes no : CExpr) :
+    (step args st (.cbranch cond yes no)).pc =
+      if (evalExpr args st cond).bits ≠ 0 then (evalExpr args st yes).bits else (evalExpr args st no).bits := by
+  rfl
 
 end Complete
 

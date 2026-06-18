@@ -108,6 +108,14 @@ structure LaneState where
   special : Special → Word
   mem     : AddrSpace → Word → Word
 
+/-- View the existing sound IL state as one SIMT lane: sound `slots` become SIMT
+temporaries and the sound memory becomes global memory. -/
+def LaneState.ofSound (mem : FlowrefDecompiler.IL.Mem) (args slots : List Word) : LaneState :=
+  { args := args
+  , tmps := fun i => slots.getD i 0
+  , special := fun _ => 0
+  , mem := fun space addr => if space = .global then mem addr else 0 }
+
 @[simp] def Atom.eval (s : LaneState) : Atom → Word
   | .arg i     => s.args.getD i 0
   | .tmp i     => s.tmps i
@@ -182,6 +190,37 @@ def fromSoundRhs : FlowrefDecompiler.IL.Rhs → Expr
   | .load addr  => .load .global (.atom (fromSoundAtom addr))
   | .sel c x y  => .where (.atom (fromSoundAtom c)) (.atom (fromSoundAtom x)) (.atom (fromSoundAtom y))
 
+/-- Atom embedding preserves the existing sound IL atom semantics. -/
+theorem fromSoundAtom_eval
+    (mem : FlowrefDecompiler.IL.Mem) (args slots : List Word)
+    (a : FlowrefDecompiler.IL.Atom) :
+    (fromSoundAtom a).eval (LaneState.ofSound mem args slots)
+      = FlowrefDecompiler.IL.Atom.eval args slots a := by
+  cases a <;> simp [fromSoundAtom, LaneState.ofSound]
+
+/-- Scalar op embedding preserves the existing sound IL operator semantics. -/
+theorem fromSoundOp_apply (op : FlowrefDecompiler.IL.Op) (a b : Word) :
+    (fromSoundOp op).apply a b = FlowrefDecompiler.IL.Op.apply op a b := by
+  cases op <;> simp [fromSoundOp, Alu.apply]
+
+/-- RHS embedding preserves the existing sound IL RHS semantics for ALU, global
+loads, and selects. This discharges the first real SIMT refinement slice; full
+program refinement remains the next gap. -/
+theorem fromSoundRhs_eval
+    (ienv : IntrinsicEnv) (mem : FlowrefDecompiler.IL.Mem) (args slots : List Word)
+    (rhs : FlowrefDecompiler.IL.Rhs) :
+    (fromSoundRhs rhs).eval ienv (LaneState.ofSound mem args slots)
+      = FlowrefDecompiler.IL.Rhs.eval mem args slots rhs := by
+  cases rhs with
+  | alu op a b =>
+      cases op <;> cases a <;> cases b <;>
+        simp [fromSoundRhs, Expr.eval, fromSoundAtom, fromSoundOp, LaneState.ofSound, Alu.apply]
+  | load addr =>
+      cases addr <;> simp [fromSoundRhs, Expr.eval, fromSoundAtom, LaneState.ofSound]
+  | sel c x y =>
+      cases c <;> cases x <;> cases y <;>
+        simp [fromSoundRhs, Expr.eval, fromSoundAtom, LaneState.ofSound]
+
 /-- Embed sound-core statements. Existing `Stmt.call` is mapped only as a pure
 intrinsic expression, not as a general effectful call. -/
 def fromSoundStmts : Nat → List FlowrefDecompiler.IL.Stmt → List Stmt
@@ -204,16 +243,55 @@ def fromSoundSProg (p : FlowrefDecompiler.IL.SProg) : Program :=
   , body := fromSoundStmts 0 p.stmts
   , ret := some (.atom (fromSoundAtom p.ret)) }
 
-/-- Tinygrad-style invariant: the SIMT core has no machine PC, trap, or syscall
-constructors. This is definitional evidence, not a soundness proof. -/
-theorem minimal_core_has_no_machine_state : True := by
-  trivial
+/-- Interpret the pure SIMT call intrinsic used by the current call embedding slice
+with the existing sound-core call environment. Other intrinsic names stay
+backend-defined and default to zero until the general intrinsic contract is
+proved. -/
+def intrinsicOfCallEnv (ce : FlowrefDecompiler.IL.CallEnv) : IntrinsicEnv :=
+  fun name args => if name = "call:f" then ce "f" args else 0
 
-/-- Placeholder shape witness for future single-lane refinement of the SIMT
-embedding. The real proof still needs to relate `intrinsic "call:f"` to
-`CallEnv` and prove the memory/temporary simulation. -/
-theorem fromSoundSProg_refines_sound_core_stub
-    (_p : FlowrefDecompiler.IL.SProg) : True := by
-  trivial
+/-- Program-level SIMT embedding slice for stores and read-after-write: the
+embedded `store_two` program returns the same value as the existing sound `SProg`
+semantics for all initial memories and arguments. -/
+theorem fromSoundSProg_store_two_eval
+    (mem : FlowrefDecompiler.IL.Mem) (p a b : Word) :
+    (fromSoundSProg FlowrefDecompiler.IL.store_two).evalLane
+        (intrinsicOfCallEnv FlowrefDecompiler.IL.CallEnv.triv)
+        (LaneState.ofSound mem [p, a, b] [])
+      = some (FlowrefDecompiler.IL.store_two.eval mem [p, a, b]) := by
+  simp only [fromSoundSProg, FlowrefDecompiler.IL.store_two, Program.evalLane,
+    fromSoundStmts, exec, fromSoundRhs, fromSoundAtom, Expr.eval, Atom.eval,
+    LaneState.ofSound, LaneState.setTmp, LaneState.store, FlowrefDecompiler.IL.SProg.eval,
+    FlowrefDecompiler.IL.sevalGo, FlowrefDecompiler.IL.Rhs.eval,
+    FlowrefDecompiler.IL.Atom.eval, FlowrefDecompiler.IL.Op.apply,
+    FlowrefDecompiler.IL.Mem.upd, List.getD_cons_zero, List.getD_cons_succ,
+    List.nil_append]
+  simp [Expr.eval, Atom.eval, fromSoundOp, Alu.apply]
+
+/-- Program-level SIMT embedding slice for calls: `Stmt.call` lowers to a pure
+`intrinsic "call:f"`, and `intrinsicOfCallEnv` makes that intrinsic agree with
+the existing `CallEnv` semantics. -/
+theorem fromSoundSProg_callDouble_eval
+    (ce : FlowrefDecompiler.IL.CallEnv) (mem : FlowrefDecompiler.IL.Mem) (x : Word) :
+    (fromSoundSProg FlowrefDecompiler.IL.callDouble).evalLane
+        (intrinsicOfCallEnv ce)
+        (LaneState.ofSound mem [x] [])
+      = some (FlowrefDecompiler.IL.callDouble.eval mem [x] ce) := by
+  simp only [fromSoundSProg, FlowrefDecompiler.IL.callDouble, Program.evalLane,
+    fromSoundStmts, exec, intrinsicOfCallEnv, fromSoundRhs, fromSoundAtom, Expr.eval,
+    Atom.eval, LaneState.ofSound, LaneState.setTmp, FlowrefDecompiler.IL.SProg.eval,
+    FlowrefDecompiler.IL.sevalGo, FlowrefDecompiler.IL.Rhs.eval,
+    FlowrefDecompiler.IL.Atom.eval, FlowrefDecompiler.IL.Op.apply, List.map_cons,
+    List.map_nil, List.getD_cons_zero, List.nil_append]
+  simp [Expr.eval, Atom.eval, fromSoundOp, Alu.apply]
+
+/-- The scalar embedding imports no backend launch identity: every `Special`
+reads as zero in the lane state produced from the existing sound core. This is a
+concrete invariant of the current embedding, not a semantic claim about future
+backend-specific `gid`/`lid` renderers. -/
+theorem ofSound_special_eval_zero
+    (mem : FlowrefDecompiler.IL.Mem) (args slots : List Word) (sp : Special) :
+    (Atom.special sp).eval (LaneState.ofSound mem args slots) = 0 := by
+  simp [LaneState.ofSound]
 
 end FlowrefDecompiler.IL.SIMT

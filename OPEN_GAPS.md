@@ -30,20 +30,25 @@ remaining value. Current order, highest first:
     same small IL: lower register, immediate, memory, branch, call, and ABI facts
     into the canonical machine instead of growing per-architecture decompilers.
 
-2b. **Strengthen the complete-IL placeholder theorems.**
+2b. **Prove complete-IL source/refinement/render semantics.**
     `FlowrefDecompiler.IL.Complete` now names the full target machine shape
-    (regs/flags/memory/PC, scalar ops, branches, calls, traps, syscalls, fences),
-    but its adapter/refinement/render witnesses are only `True` placeholders.
-    Replace placeholder `Nat` bits with width-indexed `BitVec`, then prove real
-    source-ISA adapter semantics and the embedding from the existing sound `SProg`
-    fragment.
+    (regs/flags/memory/PC, scalar ops, branches, calls, traps, syscalls, fences)
+    and proves concrete step semantics for register/temp/flag assignment, byte
+    memory stores, and branch PC updates. Replace placeholder `Nat` bits with
+    width-indexed `BitVec`, then
+    prove real source-ISA adapter semantics, an embedding from the existing sound
+    `SProg` fragment, and complete renderer correctness.
 
-2c. **Prove the SIMT embedding, not just its shape.**
+2c. **Finish general SIMT program-level embedding.**
     `FlowrefDecompiler/IL/SIMT.lean` is the tinygrad-style minimal kernel core,
-    separate from machine IL. Its `fromSoundSProg_refines_sound_core_stub` theorem
-    is a `True` shape witness. Relate `intrinsic "call:f"` to `CallEnv`, prove
-    `fromSoundSProg` preserves existing `SProg.eval`, then add backend renderers
-    for `Special`, `barrier`, guarded stores, and WMMA/intrinsics.
+    separate from machine IL. Atom, scalar-op, and RHS embedding correctness are
+    proved for ALU, global loads, and selects. Program-level slices now prove the
+    embedded `store_two` read-after-write fixture and `callDouble` via
+    `intrinsic "call:f"` agree with existing `SProg.eval`. Next, generalize those
+    fixture proofs into a statement-list simulation over arbitrary stores, calls,
+    and temporary slots, then prove `fromSoundSProg` preserves existing
+    `SProg.eval` before adding backend renderers for `Special`, `barrier`,
+    guarded stores, and WMMA/intrinsics.
 
 3. **General calls (combine, not just forward).** ~87% of real functions call
    something. The IL proves `callDouble`; lift `call; <combine result with ALU>`
