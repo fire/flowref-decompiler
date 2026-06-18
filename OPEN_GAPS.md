@@ -24,6 +24,12 @@ remaining value. Current order, highest first:
    likely the fastest real-class win. Production `emitC` currently refuses any
    non-`lea` memory operand (`hasMemOp`).
 
+2a. **Canonical-machine adapters for every Capstone arch.** The mapping contract
+    now names all Capstone architectures in `FlowrefDecompiler/CanonicalMachine.lean`.
+    Every row, including x86 and PPC, is an explicit adapter contract into the
+    same small IL: lower register, immediate, memory, branch, call, and ABI facts
+    into the canonical machine instead of growing per-architecture decompilers.
+
 3. **General calls (combine, not just forward).** ~87% of real functions call
    something. The IL proves `callDouble`; lift `call; <combine result with ALU>`
    from real multi-instruction sequences. The production emitter refuses calls.

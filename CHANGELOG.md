@@ -24,7 +24,10 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
   `condBlocks`, `predOf`, and the plausible back-edge check. It works and is fast.
 - **Minimal executable machine first.** Follow the tinygrad-style insight: encode
   executable semantics through a small canonical machine/IL, not by solving every
-  architecture independently. Architecture adapters feed the same core.
+  architecture independently. Architecture adapters feed the same core. The
+  Capstone-wide mapping contract lives in
+  `FlowrefDecompiler/CanonicalMachine.lean`; adding a new Capstone arch upstream
+  should make that exhaustive mapping fail to compile until it is classified.
 
 ## Done — production decompiler (faithful-or-refuse)
 
@@ -63,6 +66,11 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
   proofs (decode→IL→bv_decide) for: lock, lea-add, mem load, store/load aliasing,
   succ, umax/umin (cmp+cmov), forwarding call (`apply_f`), call composed with ALU
   (`g(x)+x`), and setcc+movzx comparison (`cmp;setb;movzx;ret → (a<b)?1:0`).
+- `FlowrefDecompiler/CanonicalMachine.lean` — exhaustive `Capstone.Arch` →
+  canonical-machine/IL mapping table for all 23 architectures exposed by
+  lean-capstone. Every row, including x86 and PPC, is the same kind of explicit
+  adapter contract into the small IL; production maturity is not encoded as a
+  privileged architecture class.
 - **lean-slang** (`V-Sekai-fire/lean-slang`, owned): Slang AST + BitVec semantics +
   libslang FFI (in-process SPIR-V via `dlmopen`); `slangcheck` compiles all fixtures
   end-to-end. `LeanSlang.SIMT` proves data-parallel kernel correctness = per-thread

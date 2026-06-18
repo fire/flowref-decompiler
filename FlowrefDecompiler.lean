@@ -8,6 +8,7 @@ import Flowref.Toc
 -- Decompiler-specific modules, local to this package.
 import FlowrefDecompiler.Emit
 import FlowrefDecompiler.Params
+import FlowrefDecompiler.CanonicalMachine
 import Plausible
 import Lean.Data.Json
 
