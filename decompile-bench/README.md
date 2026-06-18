@@ -119,14 +119,14 @@ The oracle currently proves the self-authored single-block leaf/flag/select
 training fixtures plus compact branch-select assembly fixtures. The remaining
 real gaps toward arbitrary Decompile-Bench rows are tracked in `../OPEN_GAPS.md`:
 
-1. **Production memory.** The formal IL proves loads/stores, but strict
+1. Production memory. The formal IL proves loads/stores, but strict
    production decompilation still refuses most real memory operands until the
    emitted C shape is oracle-proven on binaries.
-2. **General calls.** The formal IL models calls through `CallEnv`, but production
+2. General calls. The formal IL models calls through `CallEnv`, but production
    still refuses call-containing functions except narrow forwarding cases.
-3. **General control flow.** Compact branch diamonds are covered; loops and wider
+3. General control flow. Compact branch diamonds are covered; loops and wider
    CFG structuring remain `INCOMPARABLE` rather than guessed.
-4. **Architecture pattern families.** Decoding is universal, but data-flow and
+4. Architecture pattern families. Decoding is universal, but data-flow and
    return-value recovery patterns are mature primarily for x86/x64 and PowerPC.
 
 The verdict vocabulary is deliberately honest: `INCOMPARABLE` is reported

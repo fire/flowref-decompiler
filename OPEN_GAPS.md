@@ -15,7 +15,7 @@ The emitter's faithful class is intentionally smaller than the unsafe emitter.
 Every gap below describes a present refusal reason, the proof shape that makes
 the refusal removable, and the oracle signal that marks the gap closed.
 
-1. **Scalar `div`/`idiv` with zero-divisor preconditions.** `gcd`,
+1. Scalar `div`/`idiv` with zero-divisor preconditions. `gcd`,
    `count_divisors`, `is_prime`, and `lcm` require scalar division. The C
    emitter can spell `/` and `%`, but the faithful gate must refuse `div` or
    `idiv` while the divisor can be zero because C division by zero is undefined.
@@ -25,7 +25,7 @@ the refusal removable, and the oracle signal that marks the gap closed.
    guard dominates the division, emits C with an explicit nonzero fact, and
    returns `EQUIVALENT` under the full oracle.
 
-2. **64-bit magic-constant division.** `digit_count` is solved in the current
+2. 64-bit magic-constant division. `digit_count` is solved in the current
    32-bit faithful class, but `pow_uint` and `is_prime` use the compiler's
    64-bit reciprocal-multiply shape (`imul r64, r64; shr $k, r64`). The current
    `Word` model is 32-bit, so this compound idiom has no faithful semantic
@@ -35,7 +35,7 @@ the refusal removable, and the oracle signal that marks the gap closed.
    signal is a fixture that contains the magic-constant idiom, decompiles
    strictly without an unsafe banner, and returns `EQUIVALENT`.
 
-3. **Chained branch-phi resolution.** The current `simpleDiamondPhiExpr`
+3. Chained branch-phi resolution. The current `simpleDiamondPhiExpr`
    resolves one branch diamond by proving which reaching definition comes from
    the taken arm and which comes from the fallthrough arm. `subOf` and the
    block-entry phi assignment call this helper once, so a value selected by one
@@ -52,7 +52,7 @@ the refusal removable, and the oracle signal that marks the gap closed.
    strict mode and returns `EQUIVALENT`; a broad transitive search without CFG
    witnesses is not sound enough for the faithful gate.
 
-4. **Loop oracle proof.** `sumLoop_snd_double` in `IL.lean` has a `sorry`
+4. Loop oracle proof. `sumLoop_snd_double` in `IL.lean` has a `sorry`
    stub. The bilinear step `k * (2*i + k - 1)` over `BitVec 32` requires a
    ring solver that `bv_omega` cannot handle. `grind` with a `CommRing BitVec
    32` instance (Mathlib ≥ 4.26) or the lambdaclass e-graph approach
@@ -60,7 +60,7 @@ the refusal removable, and the oracle signal that marks the gap closed.
    formal proof track only; the runtime oracle still verifies emitted C
    dynamically.
 
-5. **Variable coalescing.** `eax_0`/`eax_1` SSA names are not collapsed into a
+5. Variable coalescing. `eax_0`/`eax_1` SSA names are not collapsed into a
    single source-like local when live ranges do not overlap. Output is correct
    but verbose. The missing piece is a liveness-aware coalescer that runs after
    faithful SSA construction and before C rendering, preserving parameter names
@@ -68,7 +68,7 @@ the refusal removable, and the oracle signal that marks the gap closed.
    the closure signal is readability-only diff coverage with the same
    `SOUNDNESS: 0` benchmark result.
 
-6. **Constraint-based type propagation.** Values used as pointer base addresses
+6. Constraint-based type propagation. Values used as pointer base addresses
    in `[reg+offset]` operands are not tagged as pointer types. All variables
    emit as `uint32_t`. The missing piece is a constraint pass that records
    pointer-like uses from memory operands and propagates them through copies,

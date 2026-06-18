@@ -5,24 +5,24 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
 
 ## Durable project rules (do not break)
 
-- **Faithful-or-refuse (I0).** Strict mode emits C only for the modeled class; any
+- Faithful-or-refuse (I0). Strict mode emits C only for the modeled class; any
   unmodeled instruction ⇒ refuse (hard error, nothing on stdout). Widen the gate
   ONLY after the equivalence oracle proves the new lift EQUIVALENT. `algo-bench.sh`
   must always report `SOUNDNESS: 0`.
-- **Verify + commit discipline.** Every change is checked with `lake build
+- Verify + commit discipline. Every change is checked with `lake build
   flowref-decompiler` AND `./decompile-bench/algo-bench.sh` (SOUNDNESS 0); commit
   each green step.
-- **Build Lean tools, not CLIs.** lean-slang compiles to SPIR-V in-process via a
+- Build Lean tools, not CLIs. lean-slang compiles to SPIR-V in-process via a
   libslang FFI, never the `slangc` CLI.
-- **No `objdump`.** It is denied in `.claude/settings.json`. Use flowref's own
+- No `objdump`. It is denied in `.claude/settings.json`. Use flowref's own
   disassembler or `gcc -S`.
-- **Generated C contains no inline assembly.** Assembly fixtures may exist only as
+- Generated C contains no inline assembly. Assembly fixtures may exist only as
   binary-side inputs for shape coverage; flowref's converted C output must stay
   portable C, not `asm`.
-- **CFG recovery reuses the plausible witness DAG.** Do not write new dataflow/CFG
+- CFG recovery reuses the plausible witness DAG. Do not write new dataflow/CFG
   analysis — reuse `reachingDefsB`/`resolveReachingDef`/`certifyReaching`,
   `condBlocks`, `predOf`, and the plausible back-edge check. It works and is fast.
-- **Minimal executable machine first.** Follow the tinygrad-style insight: encode
+- Minimal executable machine first. Follow the tinygrad-style insight: encode
   executable semantics through a small canonical machine/IL, not by solving every
   architecture independently. Architecture adapters feed the same core. The
   Capstone-wide mapping contract lives in
@@ -34,20 +34,20 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
 - The MVP vertical slice (bytes → compilable C, return provably equal, or refuse):
   decode → CFG/reaching-defs/params → emit+gate → `flowref-equiv` oracle. See the
   `flowref-mvp` skill for the load-bearing core.
-- **Modeled & proven leaf/flag/select class is saturated** (every single-block
+- Modeled & proven leaf/flag/select class is saturated (every single-block
   function in the bench proven), and compact branch-diamond select bridges are now
   strict for return-register selects and the first merge-φ value-select use. Strict
-  **44/60 EQUIVALENT, 0 violations**, UNSAFE 60/60 compile. Modeled: ALU,
+  44/60 EQUIVALENT, 0 violations, UNSAFE 60/60 compile. Modeled: ALU,
   neg/not, movzx/movsx (both signs), variable shifts,
   scaled+displaced `lea`, 1/2/3-operand `imul`, register-width aliasing (canonReg),
   cmp+cmov chains of any length, add/sub-carry (CF) cmov, test-ZF cmov, and `setcc`
   (the comparison-returning class). Flag conditions share one `condFromFlags` helper
   feeding both cmov and setcc.
-- **Equivalence oracle hardened.** `flowref-equiv` replaced its size-biased
+- Equivalence oracle hardened. `flowref-equiv` replaced its size-biased
   `plausible` sampler with a deterministic boundary battery (sub-register/sign/
   extreme edges) + full-range random sweep. This closed a soundness blind spot that
   had passed false EQUIVALENTs for bugs only diverging at large inputs.
-- **ETNF normaliser restored.** `flowref-etnf` is again a Lake executable backed by
+- ETNF normaliser restored. `flowref-etnf` is again a Lake executable backed by
   `lean_duckdb`; `./run-tests.sh` step 13 builds it, writes
   `etnf_{file,source,asm,function}.parquet`, and verifies the lossless join on the
   committed fixture.
@@ -55,21 +55,21 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
   `decompile-bench/asm/<name>.S` branch-shape fixtures, one function per file;
   `algo-bench.sh` compiles each and runs the oracle. Decompiler output remains C,
   never inline assembly.
-- **Autoresearch harness.** `decompile-bench/autoresearch-training-set.sh` runs a
+- Autoresearch harness. `decompile-bench/autoresearch-training-set.sh` runs a
   parallel oracle sweep (xargs -P nproc, 10s timeout) and auto-commits if SOUNDNESS=0.
   A Hermes cron and a systemd timer both fire every 5 min. The oracle default of 10s
   is intentionally short for INCOMPARABLE functions (they always time out); use 60s+
   for targeted checks when widening the faithful gate.
-- **Autoresearch soundness rule.** A 10s oracle timeout that returns INCOMPARABLE is
+- Autoresearch soundness rule. A 10s oracle timeout that returns INCOMPARABLE is
   NOT proof of soundness for functions that were previously INCOMPARABLE. Any gate
   widening that moves a function from INCOMPARABLE to faithful must be validated with
   `FLOWREF_EQUIV_TIMEOUT=60` to confirm EQUIVALENT (not just non-timeout). Failure to
   do this led to a SOUNDNESS: 3 regression (see TOMBSTONES.md `isGuardedLoop5`).
-- **Loop infrastructure.** Backward scan in `predOf`, ZF-from-arithmetic predicates
+- Loop infrastructure. Backward scan in `predOf`, ZF-from-arithmetic predicates
   (`shr`/`sub` etc. driving `jne`), loop-carried SSA injection at loop bottoms,
   `simpleLoopFaithful` (nB∈{2,3} do-while loops), `reverse_bits` EQUIVALENT.
   Score: 46/61 EQUIVALENT, SOUNDNESS 0.
-- **Oracle battery made loop-safe; same-block SSA fix; training set trimmed.**
+- Oracle battery made loop-safe; same-block SSA fix; training set trimmed.
   `boundaryVals` reduced to max 257 (eliminates O(n) loop timeouts); `boundaryValsFull`
   added for non-loop leaves; random sweep capped at `IO.rand 0 257`; `rnd` 50000→200.
   Same-block reaching defs resolved before cross-block phi construction, unlocking
@@ -80,25 +80,25 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
 
 ## Done — durable decisions and vetoed approaches
 
-- **isqrt must use loop-invariant induction, not a capped oracle.** `isqrt` is in
+- isqrt must use loop-invariant induction, not a capped oracle. `isqrt` is in
   `simpleLoopFaithful` (C manually verified correct) but the dynamic oracle times out
   at 10s because `isqrt(UINT_MAX)` runs ~65535 iterations. Capping the test range
   is probabilistic and violates the faithful-or-refuse contract. Correct path:
   `isqrtIter : Nat → Word → Word` recursive fold + `induction k` + `bv_omega`, as
   in the existing `addLoop_correct` template in `IL.lean`. Produces a theorem over
   all 2³² inputs. Do not modify `EquivCheck.lean`.
-- **DAG fuel as static loop bound.** `reachingDefsB`/`resolveReachingDef` accept a
+- DAG fuel as static loop bound. `reachingDefsB`/`resolveReachingDef` accept a
   `fuel` parameter to satisfy Lean 4's totality checker. This fuel is a proven upper
   bound on walk depth, not a heuristic. For loops whose trip count is statically
   bounded (isqrt: ≤65535 iterations), the correct Lean statement uses that bound as
   the induction bound — not as an oracle test-input cap. A theorem is universal; a
   capped oracle test is probabilistic.
-- **Graceful degradation vetoed.** Emitting partial C with `/* unmodeled */` comments
+- Graceful degradation vetoed. Emitting partial C with `/* unmodeled */` comments
   violates rule I0 (faithful-or-refuse). A function with silent gaps looks correct,
   compiles, and buries wrong behaviour where refusal would have surfaced it. The
   `--unsafe` flag with its explicit "NOT faithful" banner is the correct safety valve.
   See TOMBSTONES.md.
-- **Predicate direction rule for guarded-loop emit.** ZF-based branches (`je`/`jz`):
+- Predicate direction rule for guarded-loop emit. ZF-based branches (`je`/`jz`):
   `predOf` = test value; branch-taken = `!predOf`. Comparison-based branches
   (`jbe`/`jae` etc.): `predOf` = taken condition. Guard emit must check branch mnemonic
   to select the right sign. Normal forward-if always uses `if (!predOf)` correctly

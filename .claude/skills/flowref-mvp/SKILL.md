@@ -22,19 +22,19 @@ back toward it. When the codebase feels bloated, trim toward this; do not trim t
  capstoneDecodeBytes      Disasm + Dataflow + Params                   emitC + Emit      flowref-equiv
 ```
 
-1. **Decode** — `Flowref/Decoders.lean :: capstoneDecodeBytes` : `(arch,mode,bytes,va) → Ins[]`.
+1. Decode via `Flowref/Decoders.lean :: capstoneDecodeBytes`: `(arch,mode,bytes,va) → Ins[]`.
    `Ins = {addr, mn, ops}` (`Flowref/Disasm.lean`) — the whole contract between the
    outside world and the kernel.
-2. **Kernel / CFG** — `Disasm` carves basic blocks from `branchTarget`/`isUncondJmp`.
-3. **Kernel / data-flow** — `Flowref/Dataflow.lean :: reachingDefsB` : the witness search
+2. Kernel / CFG: `Disasm` carves basic blocks from `branchTarget`/`isUncondJmp`.
+3. Kernel / data-flow: `Flowref/Dataflow.lean :: reachingDefsB` is the witness search
    ("which def of register r reaches instruction j?"), plausible-driven, smallest form.
-4. **Kernel / params** — `FlowrefDecompiler/Params.lean` : recover the calling convention
+4. Kernel / params: `FlowrefDecompiler/Params.lean` recovers the calling convention
    (SysV x86-64 / cdecl x86-32) so a live-on-entry register read becomes a parameter `aₖ`.
-5. **Emit + gate** — `FlowrefDecompiler.lean :: emitC` + `FlowrefDecompiler/Emit.lean`:
+5. Emit + gate: `FlowrefDecompiler.lean :: emitC` + `FlowrefDecompiler/Emit.lean`
    declare each SSA value as a typed C local, lower each insn, `return` the reaching def
    of the return register, **and run the faithfulness gate** — emit as trustworthy output
    ONLY when the function is in the modeled class (see I0).
-6. **Verify** — `flowref-equiv` (`EquivCheck.lean`): lifts the region, compiles the
+6. Verify with `flowref-equiv` (`EquivCheck.lean`): lifts the region, compiles the
    (reference, candidate) pair, and runs a `plausible` `∀ args, ref = cand` search.
    `EQUIVALENT` / `NOT-EQUIVALENT` / `INCOMPARABLE`.
 
@@ -53,7 +53,7 @@ strict-proven EQUIVALENT, 0 violations.)
 
 ## Invariants (never let a refactor break these)
 
-- **I0 — faithful-or-refuse (THE product integrity invariant).** Strict mode emits C
+- I0 — faithful-or-refuse (THE product integrity invariant). Strict mode emits C
   **only** for the modeled class — one basic block, no call, no memory operand, and
   every instruction in the emitter's modeled set: `mov/lea/add/sub/and/or/xor/shl/shr/
   sar/imul/inc/dec/neg/not/movzx/movsx` register ops, plus up to **two** `cmp`+`cmovcc`
@@ -67,12 +67,12 @@ strict-proven EQUIVALENT, 0 violations.)
   register on the path — reads after them resolved to a version-less local. Fixed by the
   cmov/neg/not-aware `writesRegX` + a single-block reaching-def that falls back to the
   latest `writesRegX` def before the use.*
-- **I1 — emitted C always compiles** as C11 (drop the un-lowerable to a comment, never
+- I1 — emitted C always compiles as C11 (drop the un-lowerable to a comment, never
   to invalid syntax).
-- **I2 — the kernel is pure**: `Disasm`/`Dataflow`/`Emit` have no I/O and no Capstone
+- I2 — the kernel is pure: `Disasm`/`Dataflow`/`Emit` have no I/O and no Capstone
   dependency; they speak only `Ins`. (The hexagon — why decoders/arches/formats are
   added without touching analysis.)
-- **I3 — `return` = reaching def of the return register** (eax / r3), via the cmov-aware
+- I3 — `return` = reaching def of the return register (eax / r3), via the cmov-aware
   `writesRegX`/`defSites` for single-block leaves. Drop this and `int f(){return 7;}`
   decompiles to something returning 0.
 
@@ -114,14 +114,14 @@ applies is the lean-slang → SPIR-V compute-kernel track, where the win is **pr
 autotuning**: the equivalence proof (`bv_decide` / SIMT) makes aggressive optimization
 *safe* — prove a family of kernel variants equivalent, then pick the fastest on the 4090.
 Concrete mapping of the doc's techniques to our track:
-- **In-process compile (TinyJIT/launch-overhead analogue)** — *already done*: libslang FFI
+- In-process compile (TinyJIT/launch-overhead analogue) is already done: libslang FFI
   removed the `slangc` CLI fork; next is caching compiled SPIR-V by source hash.
-- **Kernel fusion** — extend `LeanSlang.SIMT` from a single-write per-thread body to
+- Kernel fusion extends `LeanSlang.SIMT` from a single-write per-thread body to
   multi-write / reduction bodies (associativity+commutativity obligations); the fused body
   is still `evalU32`-provable per thread, so fusion stays inside the proof.
-- **BEAM / autotuning** — pick among proven-equivalent kernels; the oracle (`flowref-equiv`)
+- BEAM / autotuning picks among proven-equivalent kernels; the oracle (`flowref-equiv`)
   or `bv_decide` is the correctness guard, so a tuner can be arbitrarily aggressive.
-- **Arithmetic intensity / tensor cores / register use** — future; each needs its own
+- Arithmetic intensity / tensor cores / register use is future work; each needs its own
   meaning-preserving rewrite lemma before it may be emitted (same I0 discipline: prove,
   then widen). *Do not chase these until the multi-write SIMT body lands.*
 
@@ -134,7 +134,7 @@ Concrete mapping of the doc's techniques to our track:
 - **xref** / `demo` subcommands / `--search-trace` — alternate entrypoints + instrumentation.
 - `--unsafe` mode — emits best-effort C for the refused class (a coverage signal, banner
   "NOT faithful — do not trust"); never trusted, never counted as proven.
-- **Removed:** the ETNF/DuckDB corpus normaliser (`Etnf.lean` is orphaned; its `flowref-etnf`
+- Removed: the ETNF/DuckDB corpus normaliser (`Etnf.lean` is orphaned; its `flowref-etnf`
   target + `lean_duckdb` dep are gone from `lakefile.lean`).
 
 ## Known honest gaps (so "missing" isn't mistaken for "broken")
