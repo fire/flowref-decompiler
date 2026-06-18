@@ -9,8 +9,7 @@ Tried to get a real branch-diamond test case (for branch→select lifting) by
 compiling `a < b ? b : a` with `gcc -O1 -fno-if-conversion -fno-if-conversion2`.
 gcc still emits `cmp; mov; cmovnb` — the backend lowers a select to `cmov`
 regardless of the if-conversion passes. **Surviving knowledge:** to get a genuine
-branch, use `-O0` or an arm the backend cannot cmov (memory effect / call); see
-`OPEN_GAPS.md` item 1.
+branch, use `-O0` or an arm the backend cannot cmov (memory effect / call).
 
 ## `plausible` `Fin 65536` sampler as the equivalence oracle — replaced
 

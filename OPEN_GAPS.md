@@ -50,10 +50,7 @@ Current score: **46/61 EQUIVALENT, SOUNDNESS 0.**
    **Next decisive action:** live-range analysis over SSA def/use graph, then rename
    in the emit pass.
 
-4. ~~**Graceful degradation for unmodeled instructions.**~~ **VETOED** — see
-   TOMBSTONES.md. The correct path is to model the instruction, not to silently skip it.
-
-5. **Constraint-based type propagation.** Tag SSA values as struct pointers when used
+4. **Constraint-based type propagation.** Tag SSA values as struct pointers when used
    as base addresses in `[reg+offset]` memory operands. Do after Track A + B.
 
 ### Ongoing proof work (parallel track)
