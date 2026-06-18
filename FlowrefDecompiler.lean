@@ -483,10 +483,21 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   let predOf : Nat → String := fun (b : Nat) =>
     let bb := blocks[b]!
     let ins := insns[bb.hi - 1]!
+    -- Search backwards within the block for the nearest flag-setter.
+    -- `cmp`/`test` give an explicit comparand; arithmetic ops (shr, sub, add, …)
+    -- also set ZF to (result == 0) and can drive je/jne.
+    let arithmeticSetsZF : String → Bool := fun mn =>
+      ["shr","sar","shl","sal","sub","add","and","or","xor","neg","not",
+       "dec","inc","imul","mul"].any (· == mn)
     let cmpIdx := (Array.range (bb.hi - bb.lo)).toList.reverse.findSome? (fun off =>
       let p := bb.lo + (bb.hi - bb.lo - 1 - off)
       let cins := insns[p]!
-      if cins.mn == "cmp" ∨ cins.mn == "test" ∨ cins.mn.startsWith "cmp" then some p else none)
+      if cins.mn == "cmp" ∨ cins.mn == "test" ∨ cins.mn.startsWith "cmp" then some p
+      -- ZF-from-arithmetic: only je/jne/jz/jnz consume ZF.
+      else if arithmeticSetsZF cins.mn ∧
+              (ins.mn == "je" ∨ ins.mn == "jz" ∨ ins.mn == "jne" ∨ ins.mn == "jnz")
+           then some p
+      else none)
     let pred : String := match cmpIdx with
       | some p =>
         let cins := insns[p]!
@@ -496,6 +507,16 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
           if hasMem tk then memToC tk
           else if tk.startsWith "0x" ∨ tk.startsWith "-" then tk
           else (subs.lookup tk).map cName |>.getD (cName tk)
+        -- Arithmetic ZF-setter: predicate is `result != 0` / `result == 0`.
+        -- Use the SSA name of the result; fall back to the first operand token.
+        let isArithZF := arithmeticSetsZF cins.mn ∧
+          (ins.mn == "je" ∨ ins.mn == "jz" ∨ ins.mn == "jne" ∨ ins.mn == "jnz")
+        if isArithZF then
+          let resName := cName ((ssaName.get? p).getD
+            ((toks.head?).getD (cins.ops.splitOn "," |>.head?.getD "")))
+          let op := if ins.mn == "je" ∨ ins.mn == "jz" then "==" else "!="
+          s!"(({resName}) {op} 0)"
+        else
         match toks with
         | [x, y] =>
           let lx := lower x; let ly := lower y

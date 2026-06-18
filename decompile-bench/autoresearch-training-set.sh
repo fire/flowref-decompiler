@@ -73,7 +73,19 @@ PY
 )
 printf '%s\n' "$summary"
 if printf '%s\n' "$summary" | grep -q "SOUNDNESS: 0 violations"; then
+  # Accept: commit any dirty tracked files in the repo root.
+  cd "$root"
+  dirty=$(git diff --name-only HEAD)
+  if [ -n "$dirty" ]; then
+    proven=$(printf '%s\n' "$summary" | grep '^STRICT' | awk '{print $3}')
+    git add -u
+    git commit -m "Autoresearch run $RUN_ID: $proven proven EQUIVALENT, SOUNDNESS 0"
+    echo "committed run $RUN_ID"
+  else
+    echo "nothing to commit for run $RUN_ID"
+  fi
   exit 0
 else
+  echo "REJECT: SOUNDNESS violation — not committing run $RUN_ID" >&2
   exit 1
 fi
