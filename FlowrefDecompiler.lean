@@ -1033,10 +1033,12 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     if !(a == .x86) || hasCall || hasMemOp then false
     else if !insns.all (fun i => modeledX86 i.mn || (cbtX i).isSome) then false
     else if !cmovsModeled || !setccModeled then false
-    -- Exclude functions with phi variables: loop bodies where a value is selected
-    -- from multiple predecessor paths are not yet faithfully modeled by this gate.
-    -- Russian_mul has eax_phi; sum_to_n/factorial/popcount do not.
-    else if (Array.range nI).any (fun q => !((useToPhiDefs.get? q).getD []).isEmpty) then false
+    -- Exclude only unresolved phi variables that survive emission. `useToPhiDefs`
+    -- is intentionally conservative and also records loop-carried values that the
+    -- loop-bottom SSA injection resolves; refusing those here blocks valid counted
+    -- loops. A literal `_phi` in the emitted body remains a hard stop because it
+    -- means a merge value escaped the current emitter's structuring pass.
+    else if contains body "_phi" then false
     else if loopHeaders.length != 1 || condBlocks.length != 2 then false
     else
       let lh := loopHeaders.headD 0
