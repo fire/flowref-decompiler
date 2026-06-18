@@ -33,15 +33,44 @@ Current score: **46/61 EQUIVALENT, SOUNDNESS 0.**
 
    Unlocks ≥5 functions (sum_to_n, factorial, popcount, ctz, log2_floor).
 
-2. **isqrt — prove via loop-invariant induction in IL.lean.**
+2. **isqrt — prove via loop-invariant induction in IL.lean, driven by the witness DAG.**
    `isqrt` is in `simpleLoopFaithful` and the C is correct, but the dynamic oracle
    times out (65535 iterations for large inputs). Capping the oracle range is wrong
-   (see TOMBSTONES.md). Correct path:
-   1. Define `isqrtIter : Nat → Word → Word` as a recursive fold (like `addLoop`).
-   2. State invariant: after k iterations the accumulator = ⌊√input⌋.
-   3. Prove by `induction k` + `bv_omega` per step.
-   4. Connect to `SProg.eval` via `fromSoundSProg`.
-   **Next decisive action:** add `isqrtIter` + `isqrtIter_correct` to `IL.lean`.
+   (see TOMBSTONES.md). Capping the oracle range is also unnecessary — the witness
+   DAG already holds everything needed for a machine-checked proof.
+
+   **The witness DAG provides all three induction ingredients automatically,**
+   consistent with the hard rule in CHANGELOG: "CFG recovery reuses the plausible
+   witness DAG. Do not write new dataflow/CFG analysis."
+
+   - **State vector (loop frame):** `reachingDefsB` + loop-carried SSA injection
+     already compute exactly which registers survive the back-edge. These are the
+     inputs for `isqrtIter`'s recursive fold — no manual guessing.
+   - **Step function:** The DAG isolates the basic blocks between the loop header
+     and the back-edge, slicing out the exact mathematical step. The emitter can
+     mechanically output this as a Lean 4 definition; `bv_omega` proves the
+     per-step arithmetic.
+   - **Termination bound (fuel):** `reachingDefsB`/`resolveReachingDef` already
+     carry a `fuel` parameter for Lean 4's totality checker. For `isqrt`, the
+     static bound is ⌊√UINT_MAX⌋ ≈ 65535 iterations — use this as the induction
+     limit in the Lean statement, not as an oracle input cap.
+
+   **Workflow (one manual step):**
+   1. DAG → loop-carried registers → `isqrtIter` state.
+   2. DAG → back-edge body → `isqrtIter` step function (emitter generates this).
+   3. DAG → fuel → induction bound in the Lean theorem.
+   4. **Only manual step:** write one line stating the invariant:
+      `isqrtLoop k init = ⌊√(init² + k)⌋`
+   5. `induction k` + `bv_omega` closes it mechanically.
+
+   **Open question:** does the current DAG expose `fuel` and loop-body reaching-defs
+   in a form the emitter can consume directly, or are they trapped in CFG recovery?
+   Check `reachingDefsB`'s return type and whether `loopHeaders`/`backEdges` carry
+   enough to slice the step function without a new pass.
+
+   **Next decisive action:** inspect `reachingDefsB` return type and `backEdges`
+   in `FlowrefDecompiler.lean`; determine whether the step function can be
+   mechanically extracted. Then add `isqrtIter` + `isqrtIter_correct` to `IL.lean`.
    Do not touch `EquivCheck.lean`.
 
 3. **Variable coalescing.** Collapse non-overlapping live ranges of the same physical
