@@ -212,6 +212,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     | none   => match arch with
                 | .x86 => if (i.mn.startsWith "cmov" ∨ i.mn.startsWith "set"
                                ∨ i.mn == "neg" ∨ i.mn == "not"
+                               ∨ i.mn == "adc" ∨ i.mn == "sbb"
                                ∨ i.mn == "ror" ∨ i.mn == "rol" ∨ i.mn == "bswap"
                                ∨ i.mn == "bsf" ∨ i.mn == "rep bsf" ∨ i.mn == "tzcnt")
                                ∧ ¬ (firstTok i).any (· == '[')
@@ -765,6 +766,19 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     | "bswap", [dst] => some s!"(uint32_t)__builtin_bswap32({subOf q subs dst})"
     | _, _ => none
 
+  -- `adc`/`sbb` consume the carry flag from the nearest preceding flag-setting
+  -- arithmetic instruction.  Reuse `condFromFlags ... "<"`, the same CF predicate
+  -- used by unsigned conditional moves, and render the carry-in explicitly.
+  let carryRhs : Nat → Ins → List (String × String) → Option String := fun q ins subs =>
+    match ins.mn, (ins.ops.splitOn ",").map (·.trimAscii.toString) with
+    | "adc", [dst, src] =>
+      (condFromFlags q "<").map (fun c =>
+        s!"({subOf q subs dst} + {subOf q subs src} + (({c}) ? 1u : 0u))")
+    | "sbb", [dst, src] =>
+      (condFromFlags q "<").map (fun c =>
+        s!"({subOf q subs dst} - {subOf q subs src} - (({c}) ? 1u : 0u))")
+    | _, _ => none
+
   let stmtOf : Nat → Option String := fun (q : Nat) =>
     let ins := insns[q]!
     if ins.mn == "cmp" ∨ ins.mn == "test" ∨ ins.mn == "nop" then none
@@ -791,6 +805,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
                       else if ins.mn == "ror" ∨ ins.mn == "rol" then (rotateRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
                       else if ins.mn == "bsf" ∨ ins.mn == "rep bsf" ∨ ins.mn == "tzcnt" then (bsfRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
                       else if ins.mn == "bswap" then (bswapRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
+                      else if ins.mn == "adc" ∨ ins.mn == "sbb" then (carryRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
                       else applyCdecl (renderExprC a ins subs)
           -- Self-move canonicalization (`mov edi,edi`) is a zero-extension idiom.
           -- Reaching-def search sees the destination clobber and can leave the source
@@ -1041,7 +1056,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- omit them, so both are handled in the production layer above.
   let modeledX86 : String → Bool := fun mn =>
     ["mov", "movzx", "movsx", "movsxd", "lea", "add", "sub", "and", "or", "xor",
-     "shl", "sal", "shr", "sar", "ror", "rol", "bswap", "bsf", "rep bsf", "tzcnt", "imul", "neg", "not", "inc", "dec",
+     "shl", "sal", "shr", "sar", "ror", "rol", "bswap", "bsf", "rep bsf", "tzcnt", "adc", "sbb", "imul", "neg", "not", "inc", "dec",
      "ret", "nop", "endbr64", "cmp", "test",
      -- xchg ax,ax / xchg rax,rax: 2/3-byte alignment NOPs. Memory xchg is
      -- blocked by hasMemOp (contains "[").
