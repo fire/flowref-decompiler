@@ -58,6 +58,18 @@ Current score: **46/61 EQUIVALENT, SOUNDNESS 0.**
    **Next decisive action:** add `isqrtIter` + `isqrtIter_correct` to `IL.lean`,
    following the `addLoop_correct` pattern exactly. Do not touch `EquivCheck.lean`.
 
+   **Architectural note — DAG fuel as a static loop bound:**
+   `reachingDefsB` and `resolveReachingDef` already pass a `fuel` parameter to
+   satisfy Lean 4's totality checker (loops in the CFG would otherwise prevent
+   termination proofs). This fuel encodes the maximum walk depth as a proven
+   upper bound on the DAG traversal, not a heuristic guess. For a loop whose
+   trip count is statically derivable from the IL (e.g., `isqrt` iterates at most
+   `⌊√UINT_MAX⌋ ≈ 65535` times), the correct induction proof uses that proven
+   bound in the Lean statement — not as an oracle test-input cap. The distinction:
+   a Lean theorem `∀ n : Word, isqrtIter n.toNat 0 = ⌊√n⌋` is a universal claim
+   discharged by `induction + bv_omega`; a capped oracle test is a probabilistic
+   claim over a finite sample. Only the former preserves `SOUNDNESS: 0`.
+
 3. **Variable coalescing.** The emitter produces `eax_0`, `eax_1` SSA versioned names.
    For human-readable output, collapse non-overlapping live ranges of the same physical
    register into a single C variable (e.g. `eax_0`/`eax_1` both become `eax` when
