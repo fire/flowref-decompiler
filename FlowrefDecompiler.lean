@@ -530,7 +530,11 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
         match toks with
         | [x, y] =>
           let lx := lower x; let ly := lower y
-          if cins.mn == "test" then s!"(({lx}) & ({ly}))"
+          if cins.mn == "test" then
+            let t := s!"(({lx}) & ({ly}))"
+            if ins.mn == "je" ∨ ins.mn == "jz" then s!"({t} == 0)"
+            else if ins.mn == "jne" ∨ ins.mn == "jnz" then s!"({t} != 0)"
+            else t
           else
             let op := if ins.mn == "je" ∨ ins.mn == "jz" then "=="
               else if ins.mn == "jne" ∨ ins.mn == "jnz" then "!="
@@ -835,13 +839,9 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
               else none
             match guardedLoopExit with
             | some exitB =>
-              -- Guard predicate direction depends on branch mnemonic:
-              -- ZF-based (je/jz): predOf = test VALUE; branch-taken = !predOf.
-              -- Comparison-based (jbe/jae etc): predOf = taken condition directly.
-              let blkBranchMn := (blkLast b).mn
-              let isZFBranch := blkBranchMn == "je" || blkBranchMn == "jz" ||
-                                blkBranchMn == "jne" || blkBranchMn == "jnz"
-              let guardPred := if isZFBranch then s!"!({predOf b})" else predOf b
+              -- `predOf` is normalized to the branch-taken condition, so the
+              -- early-exit guard can use it directly.
+              let guardPred := predOf b
               body := body ++ pad ++ s!"if ({guardPred}) " ++ "{\n"
               -- earlyB (=tb) statements, skipping its terminator (ret or jmp)
               let earlyBB := blocks[tb]!
