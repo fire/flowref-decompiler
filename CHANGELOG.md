@@ -65,8 +65,8 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
 - `FlowrefDecompiler.IL.Complete` now stubs the intended complete canonical IL:
   width-tagged values, architectural regs/flags/temps/memory/PC state, scalar ops,
   expressions, stores, branches, calls, returns, traps, syscalls, and fences. Its
-  three target theorems are intentionally `sorry` placeholders; this is a shape
-  contract, not a soundness claim.
+  three target theorems are proven only as `True` placeholder shape witnesses;
+  this is a shape contract, not a soundness claim.
 - `FlowrefDecompiler/IL/SIMT.lean` adds a separate tinygrad-style minimal SIMT
   core: launch dimensions, work-item `Special`s, address spaces, ALU/where/load,
   structured ranges/if, guarded stores, barriers, pure intrinsics/WMMA hooks, and

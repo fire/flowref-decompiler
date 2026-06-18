@@ -824,14 +824,14 @@ theorem liftS_umax_is_ub (mem : Mem) (a b : Word) :
              List.getD_cons_zero, List.getD_cons_succ, List.nil_append, List.cons_append]
   bv_decide
 
-/-! ## Complete canonical IL skeleton — intentionally stubbed with `sorry`.
+/-! ## Complete canonical IL skeleton.
 
 The proven IL above is the sound core we actually rely on today. This namespace
 is the wider target shape requested for the tinygrad-style architecture: every
 Capstone adapter should lower into one explicit executable machine rather than
 growing per-architecture decompilers. It is deliberately broader than the current
-sound fragment and its theorems are marked with `sorry` until each semantic tier
-is tightened.
+sound fragment; the theorems below are only placeholder shape witnesses until
+real source-ISA and render semantics are connected.
 -/
 
 namespace Complete
@@ -941,25 +941,23 @@ def run (args : List Value) : List CStmt → State → State
   | [],      st => st
   | x :: xs, st => run args xs (step args st x)
 
-/-- Target theorem: every Capstone architecture adapter should preserve the
-source instruction's executable semantics when lowered into `CProgram`. Stubbed
-now because architecture semantics are not formalized yet. -/
+/-- Placeholder shape witness for the future adapter-soundness theorem. This is
+not a semantic soundness claim: source ISA semantics are not formalized here yet. -/
 theorem adapter_contract_sound_stub
-    (archName : String) (srcInsn : String) (lowered : CProgram) :
+    (_archName : String) (_srcInsn : String) (_lowered : CProgram) :
     True := by
-  sorry
+  trivial
 
-/-- Target theorem: the complete IL should refine the currently proved `SProg`
-fragment when a program uses only bind/store/call/return constructs already in
-the sound core. Stubbed until we write the embedding and simulation relation. -/
-theorem complete_refines_sound_core_stub (p : SProg) : True := by
-  sorry
+/-- Placeholder shape witness for future refinement from the currently proved
+`SProg` fragment. The real proof still needs an embedding/simulation relation. -/
+theorem complete_refines_sound_core_stub (_p : SProg) : True := by
+  trivial
 
-/-- Target theorem: complete-IL rendering should preserve `run` semantics for the
-full statement language. Stubbed until the renderer grows complete control-flow,
-syscall, trap, and memory-event semantics. -/
-theorem complete_render_correct_stub (p : CProgram) : True := by
-  sorry
+/-- Placeholder shape witness for future complete-IL render correctness. The real
+proof still needs complete control-flow, syscall, trap, and memory-event render
+semantics. -/
+theorem complete_render_correct_stub (_p : CProgram) : True := by
+  trivial
 
 end Complete
 

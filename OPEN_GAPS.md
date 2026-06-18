@@ -30,17 +30,20 @@ remaining value. Current order, highest first:
     same small IL: lower register, immediate, memory, branch, call, and ABI facts
     into the canonical machine instead of growing per-architecture decompilers.
 
-2b. **Discharge the complete-IL `sorry`s.** `FlowrefDecompiler.IL.Complete` now
-    names the full target machine shape (regs/flags/memory/PC, scalar ops,
-    branches, calls, traps, syscalls, fences), but its semantics and adapter/render
-    soundness theorems are stubs. Replace placeholder `Nat` bits with width-indexed
-    `BitVec`, then prove the embedding from the existing sound `SProg` fragment.
+2b. **Strengthen the complete-IL placeholder theorems.**
+    `FlowrefDecompiler.IL.Complete` now names the full target machine shape
+    (regs/flags/memory/PC, scalar ops, branches, calls, traps, syscalls, fences),
+    but its adapter/refinement/render witnesses are only `True` placeholders.
+    Replace placeholder `Nat` bits with width-indexed `BitVec`, then prove real
+    source-ISA adapter semantics and the embedding from the existing sound `SProg`
+    fragment.
 
-2c. **Discharge the SIMT embedding `sorry`.** `FlowrefDecompiler/IL/SIMT.lean`
-    is the tinygrad-style minimal kernel core, separate from machine IL. Relate
-    `intrinsic "call:f"` to `CallEnv`, prove `fromSoundSProg` preserves existing
-    `SProg.eval`, then add backend renderers for `Special`, `barrier`, guarded
-    stores, and WMMA/intrinsics.
+2c. **Prove the SIMT embedding, not just its shape.**
+    `FlowrefDecompiler/IL/SIMT.lean` is the tinygrad-style minimal kernel core,
+    separate from machine IL. Its `fromSoundSProg_refines_sound_core_stub` theorem
+    is a `True` shape witness. Relate `intrinsic "call:f"` to `CallEnv`, prove
+    `fromSoundSProg` preserves existing `SProg.eval`, then add backend renderers
+    for `Special`, `barrier`, guarded stores, and WMMA/intrinsics.
 
 3. **General calls (combine, not just forward).** ~87% of real functions call
    something. The IL proves `callDouble`; lift `call; <combine result with ALU>`

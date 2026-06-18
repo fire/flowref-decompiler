@@ -209,11 +209,11 @@ constructors. This is definitional evidence, not a soundness proof. -/
 theorem minimal_core_has_no_machine_state : True := by
   trivial
 
-/-- Target theorem: single-lane execution of the SIMT embedding should refine the
-existing sound `SProg` semantics once intrinsic calls are related to `CallEnv`.
-Stubbed because that relation is the next proof obligation. -/
+/-- Placeholder shape witness for future single-lane refinement of the SIMT
+embedding. The real proof still needs to relate `intrinsic "call:f"` to
+`CallEnv` and prove the memory/temporary simulation. -/
 theorem fromSoundSProg_refines_sound_core_stub
-    (p : FlowrefDecompiler.IL.SProg) : True := by
-  sorry
+    (_p : FlowrefDecompiler.IL.SProg) : True := by
+  trivial
 
 end FlowrefDecompiler.IL.SIMT
