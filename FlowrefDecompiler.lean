@@ -507,7 +507,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     let ins := insns[bb.hi - 1]!
     -- Search backwards within the block for the nearest flag-setter.
     -- `cmp`/`test` give an explicit comparand; arithmetic ops (shr, sub, add, …)
-    -- also set ZF to (result == 0) and can drive je/jne.
+    -- also set ZF to (result == 0) for je/jne and SF for js/jns.
     let arithmeticSetsZF : String → Bool := fun mn =>
       ["shr","sar","shl","sal","sub","add","and","or","xor","neg","not",
        "dec","inc","imul","mul"].any (· == mn)
@@ -517,9 +517,11 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
       let p := bb.hi - 1 - off
       let cins := insns[p]!
       if cins.mn == "cmp" ∨ cins.mn == "test" ∨ cins.mn.startsWith "cmp" then some p
-      -- ZF-from-arithmetic: only je/jne/jz/jnz consume ZF.
+      -- ZF-from-arithmetic: only je/jne/jz/jnz consume ZF.  SF branches use the
+      -- same nearest arithmetic result, compared as signed against zero.
       else if arithmeticSetsZF cins.mn ∧
-              (ins.mn == "je" ∨ ins.mn == "jz" ∨ ins.mn == "jne" ∨ ins.mn == "jnz")
+              (ins.mn == "je" ∨ ins.mn == "jz" ∨ ins.mn == "jne" ∨ ins.mn == "jnz" ∨
+               ins.mn == "js" ∨ ins.mn == "jns")
            then some p
       else none)
     let pred : String := match cmpIdx with
@@ -531,15 +533,21 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
           if hasMem tk then memToC tk
           else if tk.startsWith "0x" ∨ tk.startsWith "-" then tk
           else (subs.lookup tk).map cName |>.getD (cName tk)
-        -- Arithmetic ZF-setter: predicate is `result != 0` / `result == 0`.
-        -- Use the SSA name of the result; fall back to the first operand token.
+        -- Arithmetic flag setter: ZF branches compare result to zero for equality;
+        -- SF branches compare the signed result to zero.  Use the SSA name of the
+        -- result; fall back to the first operand token.
         let isArithZF := arithmeticSetsZF cins.mn ∧
           (ins.mn == "je" ∨ ins.mn == "jz" ∨ ins.mn == "jne" ∨ ins.mn == "jnz")
-        if isArithZF then
+        let isArithSF := arithmeticSetsZF cins.mn ∧ (ins.mn == "js" ∨ ins.mn == "jns")
+        if isArithZF ∨ isArithSF then
           let resName := cName ((ssaName.get? p).getD
             ((toks.head?).getD (cins.ops.splitOn "," |>.head?.getD "")))
-          let op := if ins.mn == "je" ∨ ins.mn == "jz" then "==" else "!="
-          s!"(({resName}) {op} 0)"
+          if isArithSF then
+            let op := if ins.mn == "js" then "<" else ">="
+            s!"((int32_t)({resName}) {op} 0)"
+          else
+            let op := if ins.mn == "je" ∨ ins.mn == "jz" then "==" else "!="
+            s!"(({resName}) {op} 0)"
         else
         match toks with
         | [x, y] =>
@@ -548,6 +556,8 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
             let t := s!"(({lx}) & ({ly}))"
             if ins.mn == "je" ∨ ins.mn == "jz" then s!"({t} == 0)"
             else if ins.mn == "jne" ∨ ins.mn == "jnz" then s!"({t} != 0)"
+            else if ins.mn == "js" then s!"((int32_t)({t}) < 0)"
+            else if ins.mn == "jns" then s!"((int32_t)({t}) >= 0)"
             else t
           else
             let op := if ins.mn == "je" ∨ ins.mn == "jz" then "=="
