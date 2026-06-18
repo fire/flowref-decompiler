@@ -944,7 +944,8 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- that class the SSA + emission reproduce the source's return value, and the
   -- equivalence oracle proves it. Anything else is NOT faithfully liftable yet —
   -- the caller refuses to print it as if it were correct (see `decompileInsns`).
-  let hasCall := insns.any (fun i => i.mn == "call" ∨ (a == .ppc ∧ (i.mn == "bl" ∨ i.mn == "bctrl")))
+  let hasCall : Bool := insns.any (fun i =>
+    i.mn == "call" || (a == .ppc && (i.mn == "bl" || i.mn == "bctrl")))
   -- `lea` carries `[...]` syntax but performs address arithmetic, not a memory
   -- access — it does not disqualify a function from the faithful (register-only)
   -- class. Any other `[...]` operand is a real load/store.
@@ -952,8 +953,8 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- NOPs (nop, nopl, nopw, data16 nopw …) may carry `[...]` syntax but also never
   -- access memory — Capstone decodes them with a memory operand in the ops string
   -- even though no load/store occurs. Exclude both from the memory-access check.
-  let hasMemOp := insns.any (fun i =>
-    i.mn != "lea" ∧ ¬ i.mn.startsWith "nop" ∧ ¬ i.mn.startsWith "data" ∧ hasMem i.ops)
+  let hasMemOp : Bool := insns.any (fun i =>
+    i.mn != "lea" && !i.mn.startsWith "nop" && !i.mn.startsWith "data" && hasMem i.ops)
   -- Structure isn't enough: the lift is exact only for instructions the emitter
   -- actually MODELS. A flag-based value op (cmp+cmov, setcc) is straight-line and
   -- register-only, so it passes the structural checks above — but the emitter does
