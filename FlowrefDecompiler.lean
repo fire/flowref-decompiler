@@ -588,24 +588,31 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     (defSites.filter (fun p => canonReg p.2 == canonReg r ∧ lo ≤ p.1 ∧ p.1 < hi)).back?.map
       (fun (di, _) => (di, cName ((ssaName.get? di).getD r)))
   let simpleDiamondPhiExpr : Nat → String → List Nat → Option String := fun (q : Nat) (r : String) (defs : List Nat) =>
-    if a == .x86 ∧ nB == 3 ∧ condBlocks.length == 1 then
-      let cb := condBlocks.headD 0
+    if a == .x86 then
       let mb := idx2blk[q]!
-      let cbb := blocks[cb]!
-      match condTgtBlk cb with
-      | some takenB =>
-        let fallB := cbb.succ.find? (fun s => s != takenB)
-        match fallB with
-        | some fb =>
-          let fbb := blocks[fb]!
-          if takenB == mb ∧ fbb.succ == [mb] then
+      match condBlocks.find? (fun cb =>
+        match condTgtBlk cb with
+        | some takenB =>
+          let cbb := blocks[cb]!
+          match cbb.succ.find? (fun s => s != takenB) with
+          | some fb => takenB == mb ∧ (blocks[fb]!).succ == [mb]
+          | none => false
+        | none => false) with
+      | some cb =>
+        let cbb := blocks[cb]!
+        match condTgtBlk cb with
+        | some takenB =>
+          let fallB := cbb.succ.find? (fun s => s != takenB)
+          match fallB with
+          | some fb =>
+            let fbb := blocks[fb]!
             match latestDefIn r cbb.lo (cbb.hi - 1), latestDefIn r fbb.lo fbb.hi with
             | some (takenDi, takenV), some (fallDi, fallV) =>
               if (defs.isEmpty ∨ (defs.contains takenDi ∧ defs.contains fallDi)) then
                 some s!"(({predOf cb}) ? ({takenV}) : ({fallV}))"
               else none
             | _, _ => none
-          else none
+          | none => none
         | none => none
       | none => none
     else none
@@ -896,6 +903,20 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
       | none => pure ()
     let pad := padFor (stack.length + 1)
     if labeledBlk.contains b then body := body ++ s!"L{b}:;\n"
+    -- Resolve branch-diamond φ values at the reconverged block before any later
+    -- predicate or statement consumes them. This keeps nested branch selects from
+    -- leaking opaque `*_phi` locals into the emitted C while still requiring the
+    -- helper to prove the exact taken/fallthrough definitions.
+    let mut phiAssigned : List String := []
+    for q in [bb.lo:bb.hi] do
+      for (r, defs) in (useToPhiDefs.get? q).getD [] do
+        let phiNm := cName (r ++ "_phi")
+        if !phiAssigned.contains phiNm then
+          match simpleDiamondPhiExpr q r defs with
+          | some phi =>
+            body := body ++ pad ++ s!"{phiNm} = {phi};\n"
+            phiAssigned := phiNm :: phiAssigned
+          | none => pure ()
     -- straight-line statements
     for q in [bb.lo:stmtHi] do
       match stmtOf q with | some s => body := body ++ pad ++ s ++ "\n" | none => pure ()
