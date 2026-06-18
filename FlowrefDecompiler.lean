@@ -211,7 +211,8 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     | some r => some r
     | none   => match arch with
                 | .x86 => if (i.mn.startsWith "cmov" ∨ i.mn.startsWith "set"
-                               ∨ i.mn == "neg" ∨ i.mn == "not")
+                               ∨ i.mn == "neg" ∨ i.mn == "not"
+                               ∨ i.mn == "ror" ∨ i.mn == "rol")
                                ∧ ¬ (firstTok i).any (· == '[')
                           then some (firstTok i) else none
                 | _    => none
@@ -730,6 +731,20 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   let setccRhs : Nat → Ins → Option String := fun q ins =>
     (setCondOp ins.mn).bind (fun op => (condFromFlags q op).map (fun c => s!"({c}) ? 1 : 0"))
 
+  -- `ror/rol dst, count` are register-only rotates.  Render them in terms of
+  -- masked 32-bit shifts so the count-zero case shifts by 0 rather than 32.
+  let rotateRhs : Nat → Ins → List (String × String) → Option String := fun q ins subs =>
+    match ins.mn, (ins.ops.splitOn ",").map (·.trimAscii.toString) with
+    | "ror", [dst, cnt] =>
+      let x := subOf q subs dst
+      let n := s!"({subOf q subs cnt} & 31)"
+      some s!"(({x} >> {n}) | ({x} << ((32 - {n}) & 31)))"
+    | "rol", [dst, cnt] =>
+      let x := subOf q subs dst
+      let n := s!"({subOf q subs cnt} & 31)"
+      some s!"(({x} << {n}) | ({x} >> ((32 - {n}) & 31)))"
+    | _, _ => none
+
   let stmtOf : Nat → Option String := fun (q : Nat) =>
     let ins := insns[q]!
     if ins.mn == "cmp" ∨ ins.mn == "test" ∨ ins.mn == "nop" then none
@@ -753,6 +768,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
               | none => (rr, nm))
           let rhs0 := if ins.mn.startsWith "cmov" then (cmovRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
                       else if ins.mn.startsWith "set" then (setccRhs q ins).getD (applyCdecl (renderExprC a ins subs))
+                      else if ins.mn == "ror" ∨ ins.mn == "rol" then (rotateRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
                       else applyCdecl (renderExprC a ins subs)
           -- Self-move canonicalization (`mov edi,edi`) is a zero-extension idiom.
           -- Reaching-def search sees the destination clobber and can leave the source
@@ -1003,7 +1019,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- omit them, so both are handled in the production layer above.
   let modeledX86 : String → Bool := fun mn =>
     ["mov", "movsxd", "movzx", "movsx", "lea", "add", "sub", "and", "or", "xor",
-     "shl", "sal", "shr", "sar", "imul", "neg", "not", "inc", "dec",
+     "shl", "sal", "shr", "sar", "ror", "rol", "imul", "neg", "not", "inc", "dec",
      "ret", "nop", "endbr64", "cmp", "test",
      -- xchg ax,ax / xchg rax,rax: 2/3-byte alignment NOPs. Memory xchg is
      -- blocked by hasMemOp (contains "[").
