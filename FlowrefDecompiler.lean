@@ -861,7 +861,12 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- `lea` carries `[...]` syntax but performs address arithmetic, not a memory
   -- access — it does not disqualify a function from the faithful (register-only)
   -- class. Any other `[...]` operand is a real load/store.
-  let hasMemOp := insns.any (fun i => i.mn != "lea" ∧ hasMem i.ops)
+  -- `lea` computes an address but never accesses memory. Multi-byte alignment
+  -- NOPs (nop, nopl, nopw, data16 nopw …) may carry `[...]` syntax but also never
+  -- access memory — Capstone decodes them with a memory operand in the ops string
+  -- even though no load/store occurs. Exclude both from the memory-access check.
+  let hasMemOp := insns.any (fun i =>
+    i.mn != "lea" ∧ ¬ i.mn.startsWith "nop" ∧ ¬ i.mn.startsWith "data" ∧ hasMem i.ops)
   -- Structure isn't enough: the lift is exact only for instructions the emitter
   -- actually MODELS. A flag-based value op (cmp+cmov, setcc) is straight-line and
   -- register-only, so it passes the structural checks above — but the emitter does
@@ -909,7 +914,24 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
      (Array.range nI).any (fun q =>
       let phis := (useToPhiDefs.get? q).getD []
       ¬ phis.isEmpty ∧ phis.all (fun (r, defs) => (simpleDiamondPhiExpr q r defs).isSome)))
+  -- Second faithful multi-block bridge: a simple 3-block do-while (or 2-block) loop.
+  -- Shape: one loop-header block with a self back-edge (or B_tail → B_hdr), no call,
+  -- no memory, all modeled instructions. The loop-carried SSA injection (above) has
+  -- already fixed up phi values; the oracle confirms correctness before recording EQUIVALENT.
+  -- Qualifying shape:
+  --   nB ∈ {2, 3}, exactly one loop header (loopHeaders.length == 1),
+  --   allModeled instructions (allowing conditional branches), no call, no mem,
+  --   last block ends in ret, no forward if-then nesting (condBlocks ⊆ loopHeaders).
+  let simpleLoopFaithful :=
+    a == .x86 ∧ ¬ hasCall ∧ ¬ hasMemOp ∧
+    (insns.all (fun i => modeledX86 i.mn ∨ (cbtX i).isSome)) ∧ cmovsModeled ∧ setccModeled ∧
+    (nB == 2 ∨ nB == 3) ∧ loopHeaders.length == 1 ∧
+    -- every conditional block IS a loop header (no forward branch diamonds mixed in)
+    condBlocks.all (fun cb => loopHeaders.contains cb) ∧
+    -- last block ends in ret (the loop has a clean exit)
+    (insns[nI - 1]!.mn.startsWith "ret" ∨ insns[nI - 1]!.mn == "blr")
   let faithful := (nB == 1 ∧ ¬ hasCall ∧ ¬ hasMemOp ∧ allModeled) ∨ branchSelectFaithful
+                  ∨ simpleLoopFaithful
   let mut out : String := cPreamble
   out := out ++ s!"\n/* flowref decompile @ 0x{hex fnVa} — {nI} insns, {nB} blocks, {defSites.size} SSA defs\n"
   out := out ++ s!"   loops (plausible back-edge: {loopRes.isFailure}): {loopHeaders}; conditionals: {condBlocks}\n"
@@ -917,6 +939,8 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   if faithful then
     if branchSelectFaithful then
       out := out ++ "   equivalence: faithful lift (branch-select return diamond) — provable by decompile-bench/equiv.sh */\n\n"
+    else if simpleLoopFaithful then
+      out := out ++ "   equivalence: faithful lift (simple do-while loop, loop-carried SSA) — provable by decompile-bench/equiv.sh */\n\n"
     else
       out := out ++ "   equivalence: faithful lift (straight-line register-only leaf) — provable by decompile-bench/equiv.sh */\n\n"
   else
