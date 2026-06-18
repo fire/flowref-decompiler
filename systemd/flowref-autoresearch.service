@@ -1,0 +1,20 @@
+[Unit]
+Description=flowref autoresearch training loop — one fixed-budget iteration
+After=network.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=infinity
+WorkingDirectory=/chibifire-assets-2026w24/files/flowref-decompiler
+Environment="HOME=/home/ernest.lee"
+Environment="PATH=/home/linuxbrew/.linuxbrew/bin:/home/ernest.lee/.elan/bin:/home/ernest.lee/.pixi/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="FLOWREF_RESEARCH_BUDGET=600"
+Environment="FLOWREF_EQUIV_TIMEOUT=120"
+ExecStart=/bin/bash -c \
+  "RUN_ID=systemd-$(date -u +%%Y%%m%%dT%%H%%M%%SZ) \
+   FLOWREF_RESEARCH_RUN_ID=$RUN_ID \
+   ./decompile-bench/autoresearch-training-set.sh \
+     /tmp/flowref-autorun-$RUN_ID"
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=flowref-autoresearch

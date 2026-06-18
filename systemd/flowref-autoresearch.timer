@@ -1,0 +1,10 @@
+[Unit]
+Description=flowref autoresearch training loop — fire every 5 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+Unit=flowref-autoresearch.service
+
+[Install]
+WantedBy=timers.target
