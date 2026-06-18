@@ -212,7 +212,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     | none   => match arch with
                 | .x86 => if (i.mn.startsWith "cmov" ∨ i.mn.startsWith "set"
                                ∨ i.mn == "neg" ∨ i.mn == "not"
-                               ∨ i.mn == "ror" ∨ i.mn == "rol"
+                               ∨ i.mn == "ror" ∨ i.mn == "rol" ∨ i.mn == "bswap"
                                ∨ i.mn == "bsf" ∨ i.mn == "rep bsf" ∨ i.mn == "tzcnt")
                                ∧ ¬ (firstTok i).any (· == '[')
                           then some (firstTok i) else none
@@ -757,6 +757,14 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     | "tzcnt", [_, src] => some s!"(uint32_t)__builtin_ctz({subOf q subs src})"
     | _, _ => none
 
+  -- `bswap r32` reverses the byte order of a 32-bit register. Render through the
+  -- compiler builtin so the oracle compares against the same endian-flip idiom
+  -- GCC emits for `__builtin_bswap32`.
+  let bswapRhs : Nat → Ins → List (String × String) → Option String := fun q ins subs =>
+    match ins.mn, (ins.ops.splitOn ",").map (·.trimAscii.toString) with
+    | "bswap", [dst] => some s!"(uint32_t)__builtin_bswap32({subOf q subs dst})"
+    | _, _ => none
+
   let stmtOf : Nat → Option String := fun (q : Nat) =>
     let ins := insns[q]!
     if ins.mn == "cmp" ∨ ins.mn == "test" ∨ ins.mn == "nop" then none
@@ -782,6 +790,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
                       else if ins.mn.startsWith "set" then (setccRhs q ins).getD (applyCdecl (renderExprC a ins subs))
                       else if ins.mn == "ror" ∨ ins.mn == "rol" then (rotateRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
                       else if ins.mn == "bsf" ∨ ins.mn == "rep bsf" ∨ ins.mn == "tzcnt" then (bsfRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
+                      else if ins.mn == "bswap" then (bswapRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
                       else applyCdecl (renderExprC a ins subs)
           -- Self-move canonicalization (`mov edi,edi`) is a zero-extension idiom.
           -- Reaching-def search sees the destination clobber and can leave the source
@@ -1032,7 +1041,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- omit them, so both are handled in the production layer above.
   let modeledX86 : String → Bool := fun mn =>
     ["mov", "movzx", "movsx", "movsxd", "lea", "add", "sub", "and", "or", "xor",
-     "shl", "sal", "shr", "sar", "ror", "rol", "bsf", "rep bsf", "tzcnt", "imul", "neg", "not", "inc", "dec",
+     "shl", "sal", "shr", "sar", "ror", "rol", "bswap", "bsf", "rep bsf", "tzcnt", "imul", "neg", "not", "inc", "dec",
      "ret", "nop", "endbr64", "cmp", "test",
      -- xchg ax,ax / xchg rax,rax: 2/3-byte alignment NOPs. Memory xchg is
      -- blocked by hasMemOp (contains "[").
