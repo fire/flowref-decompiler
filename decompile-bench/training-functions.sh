@@ -8,6 +8,6 @@ TRAINING_FUNCS="id32 add2 umax umin abs_diff gray_code avg_floor \
        parity bit_merge mul5 lin2 combine4 pack16 mul7 to_byte to_half med3 \
        to_sbyte to_shalf shift_r shift_l mul_imm addr_calc scale8 nand \
        sel_nz is_zero cmp_lt cmp_le cmp_eq nonzero is_even in_range branch_select branch_select_slt branch_phi_add branch_phi_twouse \
-       russian_mul count_divisors \
-       sum_to_n factorial fib_iter popcount log2_floor reverse_bits ctz digit_count \
-       gcd isqrt pow_uint is_prime collatz_steps lcm"
+       russian_mul \
+       sum_to_n factorial fib_iter popcount log2_floor reverse_bits digit_count \
+       isqrt collatz_steps"
