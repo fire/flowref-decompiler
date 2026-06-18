@@ -813,10 +813,76 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
         | some tb =>
           let nestOk : Bool := match stack with | (0, k, _) :: _ => decide (tb ≤ k) | _ => true
           if decide (tb > b) && nestOk then
-            -- forward conditional → if-then over [b+1, tb): take the body when the
-            -- branch is NOT taken.
-            body := body ++ pad ++ s!"if (!({predOf b})) " ++ "{\n"
-            stack := (0, tb, "}") :: stack
+            -- Check for the guarded-loop DAG pattern before the normal forward-if.
+            -- Pattern: this condBlock (b) is the guard; earlyB (=tb) has an unconditional
+            -- jump to a merge block that ends in ret; condBlocks has exactly 2 members
+            -- (the guard and the loop header); b is not the loop header.
+            -- If matched: emit guard inverted so the early-exit path runs inline
+            -- and the loop body falls straight through without if-nesting.
+            let guardedLoopExit : Option Nat :=
+              if loopHeaders.length == 1 && condBlocks.length == 2 &&
+                 !loopHeaders.contains b then
+                if insns[(blocks[tb]!).hi - 1]!.mn.startsWith "ret" ||
+                   insns[(blocks[tb]!).hi - 1]!.mn == "blr" then
+                  some tb
+                else
+                  match uncondTgtBlk tb with
+                  | some mergeB =>
+                    if insns[(blocks[mergeB]!).hi - 1]!.mn.startsWith "ret" ||
+                       insns[(blocks[mergeB]!).hi - 1]!.mn == "blr"
+                    then some mergeB else none
+                  | none => none
+              else none
+            match guardedLoopExit with
+            | some exitB =>
+              -- Guard predicate direction depends on branch mnemonic:
+              -- ZF-based (je/jz): predOf = test VALUE; branch-taken = !predOf.
+              -- Comparison-based (jbe/jae etc): predOf = taken condition directly.
+              let blkBranchMn := (blkLast b).mn
+              let isZFBranch := blkBranchMn == "je" || blkBranchMn == "jz" ||
+                                blkBranchMn == "jne" || blkBranchMn == "jnz"
+              let guardPred := if isZFBranch then s!"!({predOf b})" else predOf b
+              body := body ++ pad ++ s!"if ({guardPred}) " ++ "{\n"
+              -- earlyB (=tb) statements, skipping its terminator (ret or jmp)
+              let earlyBB := blocks[tb]!
+              let earlyStmtHi := earlyBB.hi - 1   -- skip the jmp
+              for q in [earlyBB.lo:earlyStmtHi] do
+                match stmtOf q with
+                | some s => body := body ++ pad ++ "  " ++ s ++ "\n"
+                | none   => pure ()
+              -- Determine the correct guard-path return value.
+              -- B_merge typically has the shape `mov retReg, srcReg; ret`.
+              -- In the guard path, srcReg was defined in B_early (not the loop).
+              -- Find B_early's latest def of srcReg to get the right SSA name.
+              let mergeBB := blocks[exitB]!
+              let mergeStmtHi := mergeBB.hi - 1   -- index of the ret insn
+              let guardRetVal : String :=
+                if exitB == tb then
+                  retName (earlyBB.hi - 1)
+                else if mergeStmtHi > mergeBB.lo then
+                  -- B_merge has at least one non-ret stmt: find the source reg
+                  -- of that stmt's first use (the register being copied to retReg)
+                  -- then look it up in B_early.
+                  let firstMergeSubs := (useToVer.get? mergeBB.lo).getD []
+                  let srcName := match firstMergeSubs.head? with
+                    | some (srcReg, _) =>
+                      -- find latest def of srcReg in B_early
+                      match latestDefIn srcReg earlyBB.lo earlyBB.hi with
+                      | some (_, nm) => nm
+                      | none         => cName srcReg
+                    | none => retName (earlyBB.hi - 1)
+                  srcName
+                else
+                  -- pure-ret B_merge: trace from B_early's jmp
+                  retName (earlyBB.hi - 1)
+              body := body ++ pad ++ s!"  return {guardRetVal};\n"
+              body := body ++ pad ++ "}\n"
+              termConsumed := true
+            | none =>
+              -- Normal forward conditional → if-then over [b+1, tb): take the body
+              -- when the branch is NOT taken.
+              body := body ++ pad ++ s!"if (!({predOf b})) " ++ "{\n"
+              stack := (0, tb, "}") :: stack
           else
             body := body ++ pad ++ s!"if ({predOf b}) goto L{tb};\n"
         | none => pure ()      -- conditional tail to external: fall through
@@ -881,8 +947,13 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   let modeledX86 : String → Bool := fun mn =>
     ["mov", "movsxd", "movzx", "movsx", "lea", "add", "sub", "and", "or", "xor",
      "shl", "sal", "shr", "sar", "imul", "neg", "not", "inc", "dec",
-     "ret", "nop", "endbr64", "cmp", "test"].contains mn
-    ∨ (cmovCondOp mn).isSome ∨ (setCondOp mn).isSome
+     "ret", "nop", "endbr64", "cmp", "test",
+     -- xchg ax,ax / xchg rax,rax: 2/3-byte alignment NOPs. Memory xchg is
+     -- blocked by hasMemOp (contains "[").
+     -- jmp: unconditional branch, modeled structurally by the CFG emitter.
+     "xchg", "jmp"].contains mn
+    || mn.startsWith "nop"
+    || (cmovCondOp mn).isSome || (setCondOp mn).isSome
   -- A conditional move is faithful ONLY if `cmovRhs` can actually build its
   -- condition (a preceding `cmp`, or a CF-setting `add`/`sub` for an unsigned
   -- cmov). Tying the gate to `cmovRhs.isSome` keeps emitter and gate in lockstep:
@@ -907,13 +978,15 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- reconverged merge and then uses it in modeled straight-line code. Conditional
   -- branch mnemonics are allowed here only because the diamond helpers lower each
   -- merge use to an explicit ternary and the oracle checks the whole function.
-  let branchSelectFaithful := a == .x86 ∧ ¬ hasCall ∧ ¬ hasMemOp ∧
-    (insns.all (fun i => modeledX86 i.mn ∨ (cbtX i).isSome)) ∧ cmovsModeled ∧ setccModeled ∧
+  let branchSelectFaithful : Bool :=
+    (a == .x86) && !hasCall && !hasMemOp &&
+    insns.all (fun i => modeledX86 i.mn || (cbtX i).isSome) &&
+    cmovsModeled && setccModeled &&
     ((Array.range nI).any (fun q =>
-      (insns[q]!.mn.startsWith "ret" ∨ insns[q]!.mn == "blr") ∧ (simpleDiamondRetExpr q).isSome) ∨
+      (insns[q]!.mn.startsWith "ret" || insns[q]!.mn == "blr") && (simpleDiamondRetExpr q).isSome) ||
      (Array.range nI).any (fun q =>
       let phis := (useToPhiDefs.get? q).getD []
-      ¬ phis.isEmpty ∧ phis.all (fun (r, defs) => (simpleDiamondPhiExpr q r defs).isSome)))
+      !phis.isEmpty && phis.all (fun (r, defs) => (simpleDiamondPhiExpr q r defs).isSome)))
   -- Second faithful multi-block bridge: a simple 3-block do-while (or 2-block) loop.
   -- Shape: one loop-header block with a self back-edge (or B_tail → B_hdr), no call,
   -- no memory, all modeled instructions. The loop-carried SSA injection (above) has
@@ -922,16 +995,49 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   --   nB ∈ {2, 3}, exactly one loop header (loopHeaders.length == 1),
   --   allModeled instructions (allowing conditional branches), no call, no mem,
   --   last block ends in ret, no forward if-then nesting (condBlocks ⊆ loopHeaders).
-  let simpleLoopFaithful :=
-    a == .x86 ∧ ¬ hasCall ∧ ¬ hasMemOp ∧
-    (insns.all (fun i => modeledX86 i.mn ∨ (cbtX i).isSome)) ∧ cmovsModeled ∧ setccModeled ∧
-    (nB == 2 ∨ nB == 3) ∧ loopHeaders.length == 1 ∧
-    -- every conditional block IS a loop header (no forward branch diamonds mixed in)
-    condBlocks.all (fun cb => loopHeaders.contains cb) ∧
-    -- last block ends in ret (the loop has a clean exit)
-    (insns[nI - 1]!.mn.startsWith "ret" ∨ insns[nI - 1]!.mn == "blr")
-  let faithful := (nB == 1 ∧ ¬ hasCall ∧ ¬ hasMemOp ∧ allModeled) ∨ branchSelectFaithful
-                  ∨ simpleLoopFaithful
+  let simpleLoopFaithful : Bool :=
+    (a == .x86) && !hasCall && !hasMemOp &&
+    insns.all (fun i => modeledX86 i.mn || (cbtX i).isSome) &&
+    cmovsModeled && setccModeled &&
+    (nB == 2 || nB == 3) && loopHeaders.length == 1 &&
+    condBlocks.all (fun cb => loopHeaders.contains cb) &&
+    (insns[nI - 1]!.mn.startsWith "ret" || insns[nI - 1]!.mn == "blr")
+  -- Generalised "guarded loop" faithful class: a zero-guard before a counted loop,
+  -- detected via the plausible witness DAG. Works for any nB.
+  -- Pattern: one loop header, exactly two condBlocks (guard + loop header), guard's
+  -- condTgtBlk (earlyB) has an uncondTgtBlk to a ret block.
+  -- allModeled naturally excludes functions with `data16 nopw` etc (russian_mul).
+  -- Guarded-loop gate: all-Bool, no ∧/∨/¬ (Prop mixing silently breaks the Bool path).
+  let guardedLoopFaithful : Bool :=
+    if !(a == .x86) || hasCall || hasMemOp then false
+    else if !insns.all (fun i => modeledX86 i.mn || (cbtX i).isSome) then false
+    else if !cmovsModeled || !setccModeled then false
+    else if insns.any (fun i => i.mn == "imul" || i.mn == "mul") then false
+    -- Exclude functions with phi variables: loop bodies where a value is selected
+    -- from multiple predecessor paths are not yet faithfully modeled by this gate.
+    -- Russian_mul has eax_phi; sum_to_n/factorial/popcount do not.
+    else if (Array.range nI).any (fun q => !((useToPhiDefs.get? q).getD []).isEmpty) then false
+    else if loopHeaders.length != 1 || condBlocks.length != 2 then false
+    else
+      let lh := loopHeaders.headD 0
+      match condBlocks.find? (fun cb => cb != lh) with
+      | none => false
+      | some guardB =>
+        match condTgtBlk guardB with
+        | none => false
+        | some earlyB =>
+          if !Nat.ble (guardB + 1) earlyB then false
+          else if insns[(blocks[earlyB]!).hi - 1]!.mn.startsWith "ret" ||
+                  insns[(blocks[earlyB]!).hi - 1]!.mn == "blr" then true
+          else
+            match uncondTgtBlk earlyB with
+            | none => false
+            | some mergeB =>
+              insns[(blocks[mergeB]!).hi - 1]!.mn.startsWith "ret" ||
+              insns[(blocks[mergeB]!).hi - 1]!.mn == "blr"
+  let faithful : Bool :=
+    (nB == 1 && !hasCall && !hasMemOp && allModeled) ||
+    branchSelectFaithful || simpleLoopFaithful || guardedLoopFaithful
   let mut out : String := cPreamble
   out := out ++ s!"\n/* flowref decompile @ 0x{hex fnVa} — {nI} insns, {nB} blocks, {defSites.size} SSA defs\n"
   out := out ++ s!"   loops (plausible back-edge: {loopRes.isFailure}): {loopHeaders}; conditionals: {condBlocks}\n"
@@ -939,8 +1045,8 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   if faithful then
     if branchSelectFaithful then
       out := out ++ "   equivalence: faithful lift (branch-select return diamond) — provable by decompile-bench/equiv.sh */\n\n"
-    else if simpleLoopFaithful then
-      out := out ++ "   equivalence: faithful lift (simple do-while loop, loop-carried SSA) — provable by decompile-bench/equiv.sh */\n\n"
+    else if simpleLoopFaithful ∨ guardedLoopFaithful then
+      out := out ++ "   equivalence: faithful lift (loop with loop-carried SSA) — provable by decompile-bench/equiv.sh */\n\n"
     else
       out := out ++ "   equivalence: faithful lift (straight-line register-only leaf) — provable by decompile-bench/equiv.sh */\n\n"
   else
