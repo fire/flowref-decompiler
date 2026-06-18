@@ -12,18 +12,23 @@ Current score: **46/61 EQUIVALENT, SOUNDNESS 0.**
 
 ### Immediate production coverage (highest impact on STRICT count)
 
-1. **5-block loop CFG fix.** Sum_to_n, factorial, popcount, ctz, log2_floor, fib_iter
-   share the same 5-block "check-init-loop-exit-early" shape:
-   B0(entry check) → B1(init) → B2(loop ↔ B2) → B3(exit-mov) → B4(early-ret).
-   The emitter puts B4 inside the if-block, then B4's `goto L3` jumps into the
-   if-body (B3). Fix: detect this shape and emit as:
-   ```c
-   if (!test) return 0;
-   init; do { body; } while (cond); return result;
-   ```
-   Unlocks ≥6 functions if C becomes correct and oracle passes.
-   **Next decisive action:** add an `earlyExitLoopFaithful` gate + emitter rewrite
-   for this specific 5-block shape.
+1. **5-block guarded loop CFG fix.** Sum_to_n, factorial, popcount, ctz, log2_floor,
+   fib_iter share a 5-block "guard + counted loop" shape. The emitter puts the
+   early-exit block inside an if-body, then emits a cross-scope `goto` back into it.
+   A previous attempt (`isGuardedLoop5` gate) caused SOUNDNESS: 3 because the gate
+   also matched `russian_mul` and the 10s oracle timeout didn't catch it (see
+   TOMBSTONES.md). **Correct approach:**
+   - Detect the guard block via the plausible witness DAG: the condBlock (not the
+     loop header) whose `condTgtBlk` jumps to a block that has `uncondTgtBlk` pointing
+     to a ret block. Use `&&` (Bool) not `∧` (Prop) throughout.
+   - Verify with full oracle timeout (`FLOWREF_EQUIV_TIMEOUT=60`) on each newly
+     faithful function BEFORE claiming SOUNDNESS=0.
+   - The emitter rewrite: emit guard inverted (early-exit inline, walking B_early +
+     B_merge statements), then fall through to init + loop.
+   Unlocks ≥6 functions if C is correct and oracle passes with full timeout.
+   **Next decisive action:** reimplement the gate with the DAG-based detection, run
+   full oracle on russian_mul/sum_to_n/fib_iter to confirm they are INCOMPARABLE
+   (NOT the new class), then only then add sum_to_n/factorial/etc. to the gate.
 
 2. **isqrt oracle timeout.** isqrt is already in `simpleLoopFaithful` and the C is
    correct (manually verified), but the oracle times out at 10s because the plausible

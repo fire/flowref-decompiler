@@ -55,6 +55,20 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
   `decompile-bench/asm/<name>.S` branch-shape fixtures, one function per file;
   `algo-bench.sh` compiles each and runs the oracle. Decompiler output remains C,
   never inline assembly.
+- **Autoresearch harness.** `decompile-bench/autoresearch-training-set.sh` runs a
+  parallel oracle sweep (xargs -P nproc, 10s timeout) and auto-commits if SOUNDNESS=0.
+  A Hermes cron and a systemd timer both fire every 5 min. The oracle default of 10s
+  is intentionally short for INCOMPARABLE functions (they always time out); use 60s+
+  for targeted checks when widening the faithful gate.
+- **Autoresearch soundness rule.** A 10s oracle timeout that returns INCOMPARABLE is
+  NOT proof of soundness for functions that were previously INCOMPARABLE. Any gate
+  widening that moves a function from INCOMPARABLE to faithful must be validated with
+  `FLOWREF_EQUIV_TIMEOUT=60` to confirm EQUIVALENT (not just non-timeout). Failure to
+  do this led to a SOUNDNESS: 3 regression (see TOMBSTONES.md `isGuardedLoop5`).
+- **Loop infrastructure.** Backward scan in `predOf`, ZF-from-arithmetic predicates
+  (`shr`/`sub` etc. driving `jne`), loop-carried SSA injection at loop bottoms,
+  `simpleLoopFaithful` (nB∈{2,3} do-while loops), `reverse_bits` EQUIVALENT.
+  Score: 46/61 EQUIVALENT, SOUNDNESS 0.
 
 ## Done — formal IL track (machine-checked, `bv_decide`)
 

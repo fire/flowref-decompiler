@@ -22,6 +22,27 @@ see `CHANGELOG.md`). Note: `plausible` is still correct and used for the
 reaching-def witness search, where it hunts for *any* counterexample to existence,
 not value-equivalence over the full input range.
 
+## `isGuardedLoop5` gate — widened without full oracle check, reverted
+
+The Hermes autoresearch cron committed a `isGuardedLoop5 : Bool` gate that widened
+the faithful class to 5-block "guarded loop" functions. The oracle sweep at the time
+used `FLOWREF_EQUIV_TIMEOUT=10s` — too short to check `russian_mul`, `sum_to_n`, and
+`fib_iter` which were previously INCOMPARABLE (strict refused them). Once the gate
+flagged them faithful, a full oracle run revealed SOUNDNESS: 3 NOT-EQUIVALENT.
+
+Root cause: the gate checked `nB==5 ∧ b==0 ∧ tb==4 ∧ condBlocks.contains 2` which
+also matched `russian_mul` (a different 5-block shape). The emitter then emitted wrong
+C with the inverted guard + B3 inline path, producing wrong return values.
+
+Lesson: when widening the faithful gate, run `./decompile-bench/algo-bench.sh` with
+**full oracle timeout** (`FLOWREF_EQUIV_TIMEOUT=60` minimum) on all functions that
+newly become EQUIVALENT. A 10s timeout that reports INCOMPARABLE (timeout) is NOT
+proof of soundness — it just means the oracle didn't have time to find the bug.
+
+Surviving knowledge: the correct generalisation uses the plausible witness DAG to
+detect the guard block as "the condBlock whose condTgtBlk has an uncondTgtBlk to a
+ret block", not by hardcoding block indices. See OPEN_GAPS.md item 1.
+
 ## `cmovCount ≤ 2` gate cap — removed
 
 Was a workaround for the cmov-feeds-cmp SSA bug. Once the single-block reaching-def
