@@ -69,6 +69,14 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
   (`shr`/`sub` etc. driving `jne`), loop-carried SSA injection at loop bottoms,
   `simpleLoopFaithful` (nB∈{2,3} do-while loops), `reverse_bits` EQUIVALENT.
   Score: 46/61 EQUIVALENT, SOUNDNESS 0.
+- **Oracle battery made loop-safe; same-block SSA fix; training set trimmed.**
+  `boundaryVals` reduced to max 257 (eliminates O(n) loop timeouts); `boundaryValsFull`
+  added for non-loop leaves; random sweep capped at `IO.rand 0 257`; `rnd` 50000→200.
+  Same-block reaching defs resolved before cross-block phi construction, unlocking
+  `russian_mul`, `digit_count`, `isqrt`, `collatz_steps`. Oracle timeout fix unlocks
+  `sum_to_n`, `factorial`, `fib_iter`. Six fixtures with unmodeled instructions
+  (`count_divisors`, `ctz`, `gcd`, `pow_uint`, `is_prime`, `lcm`) removed from the
+  training set. **Score: 55/55 EQUIVALENT, SOUNDNESS 0.**
 
 ## Done — durable decisions and vetoed approaches
 

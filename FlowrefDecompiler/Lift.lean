@@ -184,7 +184,7 @@ def fuse (argRegs : List String) (cmp : Option (String Ã— String)) : List Ins â†
     else if i.mn == "call" then
       -- A `call <callee>` forwards this function's parameter registers to the
       -- callee (the faithful model for a forwarding/partial-application leaf such
-      -- as `apply_f(x)=f(x)` or `lcm`'s `gcd(a,b)` call). The callee result lands
+      -- as `apply_f(x)=f(x)`). The callee result lands
       -- in `rax` (SInsn.call). The callee's denotation is the uninterpreted
       -- summary `ce`, so the lift is correct for ALL callees.
       let callee := i.ops.trimAscii.toString
