@@ -210,7 +210,8 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     match writesReg arch i with
     | some r => some r
     | none   => match arch with
-                | .x86 => if (i.mn.startsWith "cmov" ∨ i.mn.startsWith "set"
+                | .x86 => if i.mn == "mul" ∧ ¬ (firstTok i).any (· == '[') then some "edx"
+                          else if (i.mn.startsWith "cmov" ∨ i.mn.startsWith "set"
                                ∨ i.mn == "neg" ∨ i.mn == "not"
                                ∨ i.mn == "adc" ∨ i.mn == "sbb"
                                ∨ i.mn == "ror" ∨ i.mn == "rol" ∨ i.mn == "bswap"
@@ -779,6 +780,21 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
         s!"({subOf q subs dst} - {subOf q subs src} - (({c}) ? 1u : 0u))")
     | _, _ => none
 
+  -- One-operand unsigned `mul r/m32` computes EDX:EAX = EAX * src. The current
+  -- SSA layer has one def per instruction, so this narrow model exposes the high
+  -- half in EDX and the faithfulness gate below requires EAX to be overwritten
+  -- before any later use. That covers the high-half idiom without pretending the
+  -- low-half clobber is fully modeled.
+  let mulRhs : Nat → Ins → List (String × String) → Option String := fun q ins subs =>
+    match ins.mn, (ins.ops.splitOn ",").map (·.trimAscii.toString) with
+    | "mul", [src] =>
+      let lhs :=
+        match (defSites.filter (fun p => canonReg p.2 == "eax" && p.1 < q)).back? with
+        | some (di, _) => cName ((ssaName.get? di).getD "eax")
+        | none => (sysvParamForReg pm.count "eax").getD "eax"
+      some s!"(uint32_t)(((uint64_t){lhs} * (uint64_t){subOf q subs src}) >> 32)"
+    | _, _ => none
+
   let stmtOf : Nat → Option String := fun (q : Nat) =>
     let ins := insns[q]!
     if ins.mn == "cmp" ∨ ins.mn == "test" ∨ ins.mn == "nop" then none
@@ -806,6 +822,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
                       else if ins.mn == "bsf" ∨ ins.mn == "rep bsf" ∨ ins.mn == "tzcnt" then (bsfRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
                       else if ins.mn == "bswap" then (bswapRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
                       else if ins.mn == "adc" ∨ ins.mn == "sbb" then (carryRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
+                      else if ins.mn == "mul" then (mulRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
                       else applyCdecl (renderExprC a ins subs)
           -- Self-move canonicalization (`mov edi,edi`) is a zero-extension idiom.
           -- Reaching-def search sees the destination clobber and can leave the source
@@ -1056,7 +1073,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- omit them, so both are handled in the production layer above.
   let modeledX86 : String → Bool := fun mn =>
     ["mov", "movzx", "movsx", "movsxd", "lea", "add", "sub", "and", "or", "xor",
-     "shl", "sal", "shr", "sar", "ror", "rol", "bswap", "bsf", "rep bsf", "tzcnt", "adc", "sbb", "imul", "neg", "not", "inc", "dec",
+     "shl", "sal", "shr", "sar", "ror", "rol", "bswap", "bsf", "rep bsf", "tzcnt", "adc", "sbb", "mul", "imul", "neg", "not", "inc", "dec",
      "ret", "nop", "endbr64", "cmp", "test",
      -- xchg ax,ax / xchg rax,rax: 2/3-byte alignment NOPs. Memory xchg is
      -- blocked by hasMemOp (contains "[").
@@ -1076,12 +1093,31 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- a setcc with no preceding flag-setter ⇒ refuse.
   let setccModeled : Bool := (Array.range nI).all (fun q =>
     !insns[q]!.mn.startsWith "set" || (setccRhs q insns[q]!).isSome)
+  -- `mul` is modeled only for the high-half EDX result. Because x86 also clobbers
+  -- EAX with the low half, require the first later EAX event to be an explicit
+  -- write (for example `mov edx, eax`) rather than a read/return of stale EAX.
+  let mulModeled : Bool := (Array.range nI).all (fun q =>
+    if insns[q]!.mn != "mul" then true
+    else
+      let subs := (useToVer.get? q).getD []
+      let writesEax := fun (i : Ins) =>
+        match writesRegX a i with
+        | some r => canonReg r == "eax"
+        | none => false
+      let readsEax := fun (i : Ins) =>
+        (readsRegs a i).any (fun r => canonReg r == "eax")
+      (mulRhs q insns[q]! subs).isSome &&
+      match (List.range (nI - (q + 1))).find? (fun off =>
+        let k := q + 1 + off
+        readsEax insns[k]! || writesEax insns[k]!) with
+      | some off => writesEax insns[q + 1 + off]!
+      | none => false)
   -- No cmov-count cap: a cmov result that feeds a later `cmp`/`cmov` is resolved
   -- correctly now that the single-block reaching-def is cmov-aware (canonical
   -- width keys + latest-def-before-use fallback). Each cmov must still resolve
   -- (`cmovsModeled`); chains of any length lift soundly (e.g. med3 = 4 cmovs).
   let allModeled : Bool := a != .x86 ||
-    (insns.all (fun i => modeledX86 i.mn) && cmovsModeled && setccModeled)
+    (insns.all (fun i => modeledX86 i.mn) && cmovsModeled && setccModeled && mulModeled)
   -- First faithful multi-block bridge: a 3-block branch diamond whose only
   -- control-flow effect is selecting a value.  The original case selected the
   -- returned register directly; the φ case selects a non-return register at the
@@ -1091,7 +1127,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   let branchSelectFaithful : Bool :=
     (a == .x86) && !hasCall && !hasMemOp &&
     insns.all (fun i => modeledX86 i.mn || (cbtX i).isSome) &&
-    cmovsModeled && setccModeled &&
+    cmovsModeled && setccModeled && mulModeled &&
     ((Array.range nI).any (fun q =>
       (insns[q]!.mn.startsWith "ret" || insns[q]!.mn == "blr") && (simpleDiamondRetExpr q).isSome) ||
      (Array.range nI).any (fun q =>
@@ -1108,7 +1144,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   let simpleLoopFaithful : Bool :=
     (a == .x86) && !hasCall && !hasMemOp &&
     insns.all (fun i => modeledX86 i.mn || (cbtX i).isSome) &&
-    cmovsModeled && setccModeled &&
+    cmovsModeled && setccModeled && mulModeled &&
     (nB == 2 || nB == 3) && loopHeaders.length == 1 &&
     condBlocks.all (fun cb => loopHeaders.contains cb) &&
     (insns[nI - 1]!.mn.startsWith "ret" || insns[nI - 1]!.mn == "blr")
@@ -1121,7 +1157,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   let guardedLoopFaithful : Bool :=
     if !(a == .x86) || hasCall || hasMemOp then false
     else if !insns.all (fun i => modeledX86 i.mn || (cbtX i).isSome) then false
-    else if !cmovsModeled || !setccModeled then false
+    else if !cmovsModeled || !setccModeled || !mulModeled then false
     -- Exclude only unresolved phi variables that survive emission. `useToPhiDefs`
     -- is intentionally conservative and also records loop-carried values that the
     -- loop-bottom SSA injection resolves; refusing those here blocks valid counted
