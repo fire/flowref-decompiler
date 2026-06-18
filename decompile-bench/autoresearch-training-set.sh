@@ -38,33 +38,34 @@ run_one() {
   local f="$1"
   local src="$here/algorithms/$f.c"
   [ -f "$src" ] || src="$here/asm/$f.S"
-  [ -f "$src" ] || { echo "missing_source"; return; }
+  [ -f "$src" ] || { printf "skip\t%s\tmissing_source\tno\t0\t0\t\t\tx64\t\t\t\t\t\n" "$f" > "$TMPD/$f.row"; return; }
   local obj="$TMPD/$f.o"
-  "$CC" -O1 -fcf-protection=none -fno-stack-protector -c "$src" -o "$obj" 2>/dev/null || { echo "compile_failed"; return; }
+  "$CC" -O1 -fcf-protection=none -fno-stack-protector -c "$src" -o "$obj" 2>/dev/null     || { printf "skip\t%s\tcompile_failed\tno\t0\t0\t\t\tx64\t\t\t\t\t\n" "$f" > "$TMPD/$f.row"; return; }
   read tvma toff < <(readelf -SW "$obj" | awk '/[ \t]\.text[ \t]/{for(i=1;i<=NF;i++)if($i=="PROGBITS"){print "0x"$(i+1),"0x"$(i+2);exit}}')
   read sval szdec < <(readelf -sW "$obj" | awk -v s="$f" '$8==s{print "0x"$2, $3}')
-  [ -n "${sval:-}" ] || { echo "symbol_not_found"; return; }
+  [ -n "${sval:-}" ] || { printf "skip\t%s\tsymbol_not_found\tno\t0\t0\t\t\tx64\t\t\t\t\t\n" "$f" > "$TMPD/$f.row"; return; }
   local szhex; szhex=$(printf "0x%x" "$szdec")
   local foff; foff=$(printf "0x%x" $((sval - tvma + toff)))
   local t0 t1 t2; t0=$(date +%s%3N)
   local verdict
-  verdict="$(FLOWREF_EQUIV_TIMEOUT="${FLOWREF_EQUIV_TIMEOUT:-10}" \
-    "$here/equiv.sh" "$obj" x64 "$sval" "$foff" "$sval" "$szhex" 2>/dev/null \
-    | awk '{print $1; exit}' || true)"
+  verdict="$(FLOWREF_EQUIV_TIMEOUT="${FLOWREF_EQUIV_TIMEOUT:-10}"     "$here/equiv.sh" "$obj" x64 "$sval" "$foff" "$sval" "$szhex" 2>/dev/null     | awk '{print $1; exit}' || true)"
   t1=$(date +%s%3N)
   local uc="no"
-  "$FR" decompile "$obj" x64 "$sval" "$foff" "$sval" "$szhex" --unsafe 2>/dev/null \
-    | "$CC" -xc -std=c11 -w -fsyntax-only - 2>/dev/null && uc="yes"
+  "$FR" decompile "$obj" x64 "$sval" "$foff" "$sval" "$szhex" --unsafe 2>/dev/null     | "$CC" -xc -std=c11 -w -fsyntax-only - 2>/dev/null && uc="yes"
   t2=$(date +%s%3N)
-  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
-    "$RUN_ID" "$f" "${verdict:-?}" "$uc" "$((t1-t0))" "$((t2-t1))" \
-    "$obj" "$src" "x64" "$sval" "$foff" "$sval" "$szhex" "$szdec" >> "$RESULTS"
+  # Write row to per-function file; collector merges in order.
+  printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\tx64\t%s\t%s\t%s\t%s\t%s\n"     "$RUN_ID" "$f" "${verdict:-?}" "$uc" "$((t1-t0))" "$((t2-t1))"     "$obj" "$src" "$sval" "$foff" "$sval" "$szhex" "$szdec" > "$TMPD/$f.row"
   printf "  %-18s %-14s unsafe=%s\n" "$f" "${verdict:-?}" "$uc"
 }
 export -f run_one
-export TMPD CC FR here FLOWREF_EQUIV_TIMEOUT="${FLOWREF_EQUIV_TIMEOUT:-10}"
+export TMPD CC FR here RUN_ID FLOWREF_EQUIV_TIMEOUT="${FLOWREF_EQUIV_TIMEOUT:-10}"
 
 printf "%s\n" $TRAINING_FUNCS | xargs -P "${BENCH_JOBS:-$(nproc)}" -I{} bash -c 'run_one "$@"' _ {}
+
+# Collect rows in FUNCS order
+for f in $TRAINING_FUNCS; do
+  [ -f "$TMPD/$f.row" ] && cat "$TMPD/$f.row" >> "$RESULTS"
+done
 
 # ── Parquet snapshot ──────────────────────────────────────────────────────────
 lake -d "$root" build flowref-training-parquet
