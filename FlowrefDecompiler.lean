@@ -489,8 +489,10 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     let arithmeticSetsZF : String → Bool := fun mn =>
       ["shr","sar","shl","sal","sub","add","and","or","xor","neg","not",
        "dec","inc","imul","mul"].any (· == mn)
-    let cmpIdx := (Array.range (bb.hi - bb.lo)).toList.reverse.findSome? (fun off =>
-      let p := bb.lo + (bb.hi - bb.lo - 1 - off)
+    -- Scan backwards from the last instruction (the branch) toward the block start.
+    -- off=0 → p = bb.hi-1 (the branch itself, skipped), off=1 → penultimate, …
+    let cmpIdx := (List.range (bb.hi - bb.lo)).findSome? (fun off =>
+      let p := bb.hi - 1 - off
       let cins := insns[p]!
       if cins.mn == "cmp" ∨ cins.mn == "test" ∨ cins.mn.startsWith "cmp" then some p
       -- ZF-from-arithmetic: only je/jne/jz/jnz consume ZF.
