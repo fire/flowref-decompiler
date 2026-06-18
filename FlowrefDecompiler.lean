@@ -385,7 +385,16 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     else
       match (reachingDefsB 4000 insns addr2idx a q retReg).1 with
       | [di] => cName ((ssaName.get? di).getD retReg)
-      | _    => cName retReg
+      | _    =>
+        -- Some modeled fallback defs (notably sub-register zero-extension such as
+        -- `movzbl %al,%eax`) are present in `defSites`/SSA but absent from the
+        -- dependency package's reaching-def result. In guarded-loop emissions the
+        -- early exit is emitted inline, so the final ret block represents the loop
+        -- path; use the latest known return-register def before the ret rather
+        -- than the zero-initialized raw base local.
+        match (defSites.filter (fun p => canonReg p.2 == canonReg retReg ∧ p.1 < q)).back? with
+        | some (di, _) => cName ((ssaName.get? di).getD retReg)
+        | none         => cName retReg
 
   -- ===== loop recovery from the plausible back-edge witnesses =====
   -- `backEdges`/`loopHeaders` (above) are the counterexamples to the `loopProp`
@@ -1015,7 +1024,9 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
               let mergeStmtHi := mergeBB.hi - 1   -- index of the ret insn
               let guardRetVal : String :=
                 if exitB == tb then
-                  retName (earlyBB.hi - 1)
+                  match latestDefIn retReg bb.lo stmtHi with
+                  | some (_, nm) => nm
+                  | none         => retName (earlyBB.hi - 1)
                 else if mergeStmtHi > mergeBB.lo then
                   -- B_merge has at least one non-ret stmt: find the source reg
                   -- of that stmt's first use (the register being copied to retReg)
