@@ -53,6 +53,18 @@ jobs:
           fi
           test -f "$LIB"
 
+      - name: Fetch Slang SDK for LeanSlang FFI
+        run: |
+          FETCH=.lake/packages/LeanSlang/vendor/fetch.sh
+          HEADER=.lake/packages/LeanSlang/vendor/include/slang.h
+          LIB=.lake/packages/LeanSlang/vendor/lib/libslang.so
+          if [ ! -f "$HEADER" ] || [ ! -f "$LIB" ]; then
+            chmod +x "$FETCH" || true
+            "$FETCH"
+          fi
+          test -f "$HEADER"
+          test -f "$LIB"
+
       - name: Build flowref
         run: lake build
 
