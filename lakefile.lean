@@ -78,3 +78,14 @@ lean_exe «flowref-etnf» where
     "-Wl,-rpath,$ORIGIN", "-Wl,-rpath,$ORIGIN/../../../packages/lean_duckdb/vendor",
     "-Wl,-rpath,.lake/packages/lean_duckdb/vendor"
   ]
+
+-- AutoResearch-style training-set snapshots: manifest + oracle results +
+-- hypotheses as standalone Parquet files. DuckDB is used only as an in-process
+-- Parquet writer/query engine; no persistent database is created.
+lean_exe «flowref-training-parquet» where
+  root := `TrainingSet
+  moreLinkArgs := #[
+    "-L.lake/packages/lean_duckdb/vendor", "-lduckdb",
+    "-Wl,-rpath,$ORIGIN", "-Wl,-rpath,$ORIGIN/../../../packages/lean_duckdb/vendor",
+    "-Wl,-rpath,.lake/packages/lean_duckdb/vendor"
+  ]

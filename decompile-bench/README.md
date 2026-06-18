@@ -70,6 +70,31 @@ Example:
 The generated objects are not tracked; the C/assembly fixtures plus the build
 script are the reproducible training-set source of truth.
 
+## AutoResearch-style training loop — Parquet, not a database
+
+`autoresearch-training-set.sh` applies the useful principles from
+`karpathy/autoresearch` to the decompiler training set: fixed-budget iterations,
+one reproducible evaluation loop, measured accept/reject metrics, and durable
+experiment logs. The output is standalone Parquet files, not a persistent
+database:
+
+```bash
+FLOWREF_RESEARCH_BUDGET=300 ./autoresearch-training-set.sh
+```
+
+It materializes binaries, runs the strict equivalence oracle plus unsafe C syntax
+check, then writes:
+
+* `training_manifest.parquet` — binary/source/region metadata.
+* `training_results.parquet` — per-fixture verdicts and timings.
+* `training_summary.parquet` — `total`, `proven`, `soundness_violations`,
+  `unsafe_compiles`.
+* `training_hypotheses.parquet` — current research hypotheses and metrics.
+
+Lean's `flowref-training-parquet` executable uses `lean_duckdb` only as an
+in-process Parquet writer/query engine; it does not create or maintain a database
+file.
+
 ## Demonstration — `equiv-demo.sh` (runnable now, no network)
 
 ```text

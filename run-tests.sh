@@ -164,6 +164,26 @@ else
   echo "skip: libduckdb not vendored ($DUCKLIB) — run 'lake update lean_duckdb'"
 fi
 
+echo "== 13b. AutoResearch training-set Parquet snapshot (lean-duckdb) =="
+if [ -f "$DUCKLIB" ]; then
+  lake build flowref-training-parquet || fail "flowref-training-parquet build"
+  TROOT="$(mktemp -d /tmp/flowref-training.XXXXXX)"
+  ./decompile-bench/build-training-binaries.sh "$TROOT/binaries" >/dev/null
+  RESULTS="$TROOT/results.tsv"
+  printf "run_id\tfunction\tverdict\tunsafe_compiles\tstrict_ms\tunsafe_ms\tobject\tsource\tarch\tsymbol_vaddr\tfile_offset\tregion_vaddr\tsize_hex\tsize_dec\n" > "$RESULTS"
+  awk -F '\t' 'NR==2 {printf "ci\t%s\tEQUIVALENT\tyes\t1\t1\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", $1,$3,$2,$4,$5,$6,$7,$8,$9}' \
+    "$TROOT/binaries/manifest.tsv" >> "$RESULTS"
+  ./.lake/build/bin/flowref-training-parquet "$TROOT/binaries/manifest.tsv" "$RESULTS" "$TROOT/parquet" | tee "$TROOT/log"
+  grep -q "training parquet snapshot" "$TROOT/log" || { rm -rf "$TROOT"; fail "training parquet summary missing"; }
+  for rel in training_manifest training_results training_summary training_hypotheses; do
+    test -f "$TROOT/parquet/$rel.parquet" || { rm -rf "$TROOT"; fail "missing $rel.parquet"; }
+  done
+  rm -rf "$TROOT"
+  pass "training manifest/results/summary/hypotheses written as Parquet"
+else
+  echo "skip: libduckdb not vendored ($DUCKLIB) — run 'lake update lean_duckdb'"
+fi
+
 echo "== 14. ELF resolution (self-contained FFI): list + symbol/address short forms =="
 # The flowref binary is itself an ELF — use it as a self-contained fixture.
 SELF="$BIN"
