@@ -273,7 +273,12 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
         let canonDefsBefore := defSites.filter (fun p =>
           canonReg p.2 == canonReg r ∧ p.1 < j ∧
             (idx2blk[p.1]! == idx2blk[j]! ∨ reaches idx2blk[p.1]! idx2blk[j]!))
-        match (if nB == 1 then canonDefsBefore.back? else none) with
+        -- A def earlier in the same basic block always dominates this use, even
+        -- in multi-block functions. Prefer that straight-line local def before
+        -- falling back to cross-block phi construction; this covers modeled
+        -- writes missing from the dependency resolver such as cmove/setcc.
+        let sameBlockDefBefore := canonDefsBefore.filter (fun p => idx2blk[p.1]! == idx2blk[j]!) |>.back?
+        match (if nB == 1 then canonDefsBefore.back? else sameBlockDefBefore) with
         | some (di, _) =>
           let nm := cName ((ssaName.get? di).getD r)
           useToVer := useToVer.insert j (((useToVer.get? j).getD []) ++ [(r, nm)])

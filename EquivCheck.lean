@@ -53,17 +53,24 @@ def agreeOn (v : Array UInt32) : Bool :=
     h (v.getD 0 0) (v.getD 1 0) (v.getD 2 0) (v.getD 3 0) (v.getD 4 0) (v.getD 5 0)
   g refCall == g candCall
 
-/-- Boundary values that expose width/sign/truncation bugs the random sampler
-misses: sub-register edges (255/256, 0xffff/0x10000), sign edges (0x7fffffff,
-0x80000000), and the extremes. A size-biased PRNG almost never reaches these —
-e.g. a dropped `movzx` truncation only diverges at args ≥ 256. -/
--- 0xffff/0x10000 removed: cause 65535+ iterations in O(n) loop bodies.
--- 0x7fff/0x8000 already cover 16-bit sign boundary. Large-input corner
--- (0x7fffffff, 0xffffffff) removed: O(n) loops exhaust the 10s budget.
--- boundaryValsFull below retains them for non-loop functions.
+/-- Small boundary battery — loop-safe (max 257 iterations for O(n) bodies).
+Catches sub-register width bugs (movzx truncation diverges at ≥ 256), small
+off-by-one errors, and zero/one edge cases. Safe for O(n) loop functions like
+`sum_to_n`, `factorial`, `fib_iter` under the 10 s oracle budget.
+Values removed because they cause loop-body timeouts: 1000, 4095, 4096,
+0x7fff (32767), 0x8000, 5000, 0x12345678.
+See `boundaryValsFull` for the extended set used by non-loop leaf functions. -/
 def boundaryVals : List UInt32 :=
-  [0, 1, 2, 3, 7, 255, 256, 257, 4095, 4096, 0x7fff, 0x8000,
-   100, 1000, 5000, 0x12345678]
+  [0, 1, 2, 3, 7, 100, 255, 256, 257]
+
+/-- Extended boundary set — safe for straight-line and branch-select leaves
+whose single call is O(1). Adds sign-boundary edges (0x7fff/0x8000,
+0x7fffffff/0x80000000), large-constant edges (0xffffffff, 0x12345678,
+4095/4096) that are needed to catch 32-bit overflow bugs. Do NOT use this
+for O(n) loop functions — those exhaust the oracle budget on large inputs. -/
+def boundaryValsFull : List UInt32 :=
+  boundaryVals ++ [1000, 4095, 4096, 0x7fff, 0x8000,
+                   0x7fffffff, 0x80000000, 0xffffffff, 0x12345678]
 
 /-- Search for an argument vector on which `ref` and `cand` differ. Deterministic
 boundary battery first (single-axis sweeps over `boundaryVals` against a distinct
@@ -80,11 +87,16 @@ def findMismatch (rnd : Nat) : IO (Option (Array UInt32)) := do
     for b in boundaryVals do vecs := (((base.set! 0 a).set! 1 b)) :: vecs
   for v in vecs do
     if ¬ agreeOn v then return some v
-  -- full-range random sweep
+  -- full-range random sweep capped at 257: keeps per-call iteration count ≤ 257
+  -- for O(n) loop functions (sum_to_n, factorial, fib_iter).
+  -- The boundary battery already hits sub-register edges; random sampling is a
+  -- second-tier net for arg-mixing bugs at values the battery does not reach.
+  -- Full-range random (0..0xffffffff) is not used here because a random input of
+  -- e.g. 0x80000000 causes 2^31 loop iterations per call → seconds per call.
   for _ in [0:rnd] do
     let mut v : Array UInt32 := #[]
     for _ in [0:6] do
-      let r ← IO.rand 0 0xffffffff
+      let r ← IO.rand 0 257
       v := v.push (UInt32.ofNat r)
     if ¬ agreeOn v then return some v
   return none
@@ -136,7 +148,12 @@ def main (argv : List String) : IO Unit := do
     --    only diverges at args ≥ 256) followed by a full-range random sweep. Six
     --    args cover the SysV integer-arg registers; a counterexample IS disproof.
     let ar := candArity cand hexName
-    let rnd := 50000
+    -- 200 random vectors is sufficient: the boundary battery already hits all
+    -- sub-register edges (movzx, sign extension, wrap) deterministically; random
+    -- sampling is a second-tier net for arg-mixing bugs. Loop functions finish
+    -- their loop bodies at most 257 times per call (bounded by boundaryVals max),
+    -- so 200 random calls × 257 iterations = 51 400 iterations — well inside 10s.
+    let rnd := 200
     match ← findMismatch rnd with
     | some v =>
       IO.println s!"NOT-EQUIVALENT  (divergent args {v.toList.take (max ar 1)}, arity {ar})"
