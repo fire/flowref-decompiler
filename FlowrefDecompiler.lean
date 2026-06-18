@@ -1065,7 +1065,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   if faithful then
     if branchSelectFaithful then
       out := out ++ "   equivalence: faithful lift (branch-select return diamond) — provable by decompile-bench/equiv.sh */\n\n"
-    else if simpleLoopFaithful ∨ guardedLoopFaithful then
+    else if simpleLoopFaithful || guardedLoopFaithful then
       out := out ++ "   equivalence: faithful lift (loop with loop-carried SSA) — provable by decompile-bench/equiv.sh */\n\n"
     else
       out := out ++ "   equivalence: faithful lift (straight-line register-only leaf) — provable by decompile-bench/equiv.sh */\n\n"
