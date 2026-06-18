@@ -1,103 +1,94 @@
-# OPEN_GAPS — unfinished work, open problems (present tense)
+# OPEN_GAPS — unfinished work, open problems
 
-Each item names the next decisive action when known. Completed items move to
+Each item states where the system stands. Completed items move to
 `CHANGELOG.md`; abandoned approaches move to `TOMBSTONES.md`.
 
 ## Priorities (2026-06-18)
 
-Current score: **46/61 EQUIVALENT, SOUNDNESS 0.**
+Score: **46/61 EQUIVALENT, SOUNDNESS 0.**
 
-### Immediate production coverage (highest impact on STRICT count)
+### Immediate production coverage
 
 1. **5-block guarded loop CFG fix.** Sum_to_n, factorial, popcount, ctz, log2_floor,
-   fib_iter share a "guard + counted loop" shape. The emitter currently puts the
-   early-exit block inside an if-body and emits a cross-scope `goto` back into it.
+   and fib_iter share a "guard + counted loop" shape. The emitter puts the early-exit
+   block inside an if-body and emits a cross-scope `goto` back into it. The oracle
+   refuses all six as INCOMPARABLE.
 
-   A previous attempt (`isGuardedLoop5` gate) caused SOUNDNESS: 3 — see TOMBSTONES.md.
+   A prior attempt (`isGuardedLoop5` gate) produced SOUNDNESS: 3 — see TOMBSTONES.md.
 
-   **Correct approach (DAG-based, no hardcoded block indices):**
-   - Detect the guard block as the condBlock (not the loop header) whose `condTgtBlk`
-     jumps to earlyB, where earlyB has an `uncondTgtBlk` pointing to a ret block.
-   - Use `&&` (Bool) not `∧` (Prop) throughout the gate; do not mix them into `faithful`.
-   - Branch predicate direction: ZF-based branches (`je`/`jz`) → guard uses `!predOf`;
-     comparison-based branches (`jbe`/`jae` etc.) → guard uses `predOf` directly.
-   - Return value: use `latestDefIn` on the source register of B_merge's copy insn,
-     traced from B_early's context — do not re-emit B_merge's stmts.
-   - Verify with `FLOWREF_EQUIV_TIMEOUT=60` on each newly faithful function before
-     committing. `russian_mul` must remain INCOMPARABLE (data16 nopw fails allModeled).
+   The correct detection uses the plausible witness DAG: the guard block is the
+   condBlock (not the loop header) whose `condTgtBlk` leads to an earlyB that has an
+   `uncondTgtBlk` pointing to a ret block. The gate expression is all-Bool (`&&`);
+   mixing Bool `guardedLoopFaithful` into the Prop-based `faithful` via `∨` silently
+   drops it — use `decide guardedLoopFaithful` or rewrite `faithful` with `||`.
 
-   **WIP in stash:** `git stash pop` — emitter fix is correct (manually tested),
-   gate is structurally right but `guardedLoopFaithful : Bool` is being silently
-   dropped when combined via `∨` into the Prop-based `faithful`. Fix: rewrite
-   `faithful` as all-Bool with `||`, or wrap with `decide guardedLoopFaithful`.
+   Branch predicate direction depends on mnemonic: ZF-based branches (`je`/`jz`) have
+   branch-taken = `!predOf`; comparison-based branches (`jbe`/`jae` etc.) have
+   branch-taken = `predOf`. The guard return value traces through `latestDefIn` on the
+   source register of B_merge's copy instruction from B_early's context; re-emitting
+   B_merge's statements produces the wrong SSA binding.
 
-   Unlocks ≥5 functions (sum_to_n, factorial, popcount, ctz, log2_floor).
+   Gate validation requires `FLOWREF_EQUIV_TIMEOUT=60` on each newly faithful function.
+   `russian_mul` has `data16 nopw` and fails `allModeled`; it stays INCOMPARABLE.
 
-2. **isqrt — prove via loop-invariant induction in IL.lean, driven by the witness DAG.**
-   `isqrt` is in `simpleLoopFaithful` and the C is correct, but the dynamic oracle
-   times out (65535 iterations for large inputs). Capping the oracle range is wrong
-   (see TOMBSTONES.md). Capping the oracle range is also unnecessary — the witness
-   DAG already holds everything needed for a machine-checked proof.
+   WIP lives in `git stash@{0}` ("WIP: guardedLoopFaithful gate + emitter fix").
 
-   **The witness DAG provides all three induction ingredients automatically,**
-   consistent with the hard rule in CHANGELOG: "CFG recovery reuses the plausible
-   witness DAG. Do not write new dataflow/CFG analysis."
+2. **isqrt oracle gap.** `isqrt` is in `simpleLoopFaithful` and the emitted C is
+   correct, but the dynamic oracle times out: `isqrt(UINT_MAX)` runs ~65535 iterations
+   and the plausible search exhausts its budget before finding a witness.
 
-   - **State vector (loop frame):** `reachingDefsB` + loop-carried SSA injection
-     already compute exactly which registers survive the back-edge. These are the
-     inputs for `isqrtIter`'s recursive fold — no manual guessing.
-   - **Step function:** The DAG isolates the basic blocks between the loop header
-     and the back-edge, slicing out the exact mathematical step. The emitter can
-     mechanically output this as a Lean 4 definition; `bv_omega` proves the
-     per-step arithmetic.
-   - **Termination bound (fuel):** `reachingDefsB`/`resolveReachingDef` already
-     carry a `fuel` parameter for Lean 4's totality checker. For `isqrt`, the
-     static bound is ⌊√UINT_MAX⌋ ≈ 65535 iterations — use this as the induction
-     limit in the Lean statement, not as an oracle input cap.
+   Capping the oracle range is wrong — see TOMBSTONES.md.
 
-   **Workflow (one manual step):**
-   1. DAG → loop-carried registers → `isqrtIter` state.
-   2. DAG → back-edge body → `isqrtIter` step function (emitter generates this).
-   3. DAG → fuel → induction bound in the Lean theorem.
-   4. **Only manual step:** write one line stating the invariant:
-      `isqrtLoop k init = ⌊√(init² + k)⌋`
-   5. `induction k` + `bv_omega` closes it mechanically.
+   The witness DAG holds all three ingredients for a machine-checked induction proof,
+   consistent with the hard rule in CHANGELOG ("CFG recovery reuses the plausible
+   witness DAG — do not write new dataflow/CFG analysis"):
 
-   **Open question:** does the current DAG expose `fuel` and loop-body reaching-defs
-   in a form the emitter can consume directly, or are they trapped in CFG recovery?
-   Check `reachingDefsB`'s return type and whether `loopHeaders`/`backEdges` carry
-   enough to slice the step function without a new pass.
+   - **State vector:** `reachingDefsB` and loop-carried SSA injection already identify
+     the exact registers that cross the back-edge. These are the inputs to the
+     `isqrtIter` recursive fold.
+   - **Step function:** the DAG isolates the basic blocks between the loop header and
+     the back-edge. The emitter has enough structure to slice out the step function
+     mechanically; `bv_omega` closes the per-step arithmetic.
+   - **Termination bound:** `reachingDefsB` and `resolveReachingDef` carry a `fuel`
+     parameter for Lean 4's totality checker. For `isqrt` the static bound is
+     ⌊√UINT_MAX⌋ ≈ 65535; this is the induction limit in the Lean statement, not an
+     oracle input cap.
 
-   **Next decisive action:** inspect `reachingDefsB` return type and `backEdges`
-   in `FlowrefDecompiler.lean`; determine whether the step function can be
-   mechanically extracted. Then add `isqrtIter` + `isqrtIter_correct` to `IL.lean`.
-   Do not touch `EquivCheck.lean`.
+   The only non-mechanical step is stating the invariant:
+   `isqrtLoop k init = ⌊√(init² + k)⌋`. `induction k` + `bv_omega` closes it.
 
-3. **Variable coalescing.** Collapse non-overlapping live ranges of the same physical
-   register into a single C variable (`eax_0`/`eax_1` → `eax`). Purely aesthetic,
-   does not affect correctness or STRICT count. Do after Track A loop fixes.
-   **Next decisive action:** live-range analysis over SSA def/use graph, then rename
-   in the emit pass.
+   One open question: `reachingDefsB`'s return type and `backEdges` may not expose
+   enough to emit the step function without threading extra data out of CFG recovery.
+   That needs inspection before the IL proof is written. The proof target is
+   `isqrtIter` + `isqrtIter_correct` in `IL.lean`; `EquivCheck.lean` is not touched.
 
-4. **Constraint-based type propagation.** Tag SSA values as struct pointers when used
-   as base addresses in `[reg+offset]` memory operands. Do after Track A + B.
+3. **Variable coalescing gap.** The emitter produces `eax_0`, `eax_1` SSA-versioned
+   names. Non-overlapping live ranges of the same physical register are not collapsed,
+   so output reads as compiler intermediate text rather than idiomatic C. This does not
+   affect correctness or the STRICT count. A live-range analysis over the SSA def/use
+   graph feeds a rename pass in the emitter.
 
-### Ongoing proof work (parallel track)
+4. **Constraint-based type propagation gap.** The emitter infers types from physical
+   width only (`uint32_t`). A value used as a base address in `[reg+offset]` memory
+   operands is not tagged as a pointer type. A data-flow pass propagating
+   pointer-constraint facts through def/use chains is absent.
 
-6. **Finish general SIMT program-level embedding.**
-   `FlowrefDecompiler/IL/SIMT.lean` — arbitrary single binds, stores, and calls have
-   one-step bridge theorems. Next: compose into statement-list simulation, then prove
-   `fromSoundSProg` preserves `SProg.eval`.
+### Ongoing proof work
 
-7. **Provably-bounded unrolling for small fixed-count loops** — after the guarded-loop
-   fix lands (item 1).
+5. **SIMT program-level embedding incomplete.** `FlowrefDecompiler/IL/SIMT.lean` has
+   one-step bridge theorems for arbitrary single binds, stores, and calls. Statement-
+   list simulation is not composed, and `fromSoundSProg` preserving `SProg.eval` is
+   not proved.
 
-8. **`slangcheck`** — `whileLoopShader` emits 168 bytes because the loop body is
-   dead-code-eliminated. Give it a side-effecting body.
+6. **Provably-bounded unrolling for small fixed-count loops** is absent. It depends on
+   the guarded-loop fix (item 1) landing first.
+
+7. **`slangcheck` whileLoopShader body is dead-code-eliminated.** The shader emits
+   168 bytes because the loop body has no side effects. A side-effecting body is
+   not yet written.
 
 ## Known latent caveats
 
 - Variable-shift lifts (`a0 >> a1`) are UB-reliant in C but sound under the
   oracle's compiled-candidate-vs-binary contract.
-- The autoresearch systemd timer is currently stopped. Hermes cron fires every 5 min.
-  Monitor: `journalctl --user -fu flowref-autoresearch.service` / `git log --oneline -10`
+- The autoresearch systemd timer is stopped. The Hermes cron fires every 5 minutes.
