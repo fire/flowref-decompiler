@@ -641,6 +641,10 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     else if mn == "cmova" ∨ mn == "cmovnbe" then some ">"
     else if mn == "cmove" ∨ mn == "cmovz" then some "=="
     else if mn == "cmovne" ∨ mn == "cmovnz" then some "!="
+    else if mn == "cmovl" ∨ mn == "cmovnge" then some "i<"
+    else if mn == "cmovle" ∨ mn == "cmovng" then some "i<="
+    else if mn == "cmovg" ∨ mn == "cmovnle" then some "i>"
+    else if mn == "cmovge" ∨ mn == "cmovnl" then some "i>="
     -- SF-based: cmovs = move if sign (result < 0); cmovns = move if not sign (≥ 0).
     -- Used by the neg+cmovs idiom for signed absolute value.
     else if mn == "cmovs" then some "s<"
@@ -658,7 +662,18 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     -- SF-based conditions (s< / s>=): find the nearest SF-setting instruction
     -- (neg, add, sub, and, or, xor, inc, dec) and compare its signed result to 0.
     -- Used by cmovs/cmovns after neg for the abs() idiom.
-    if op == "s<" ∨ op == "s>=" then
+    if op == "i<" ∨ op == "i<=" ∨ op == "i>" ∨ op == "i>=" then
+      match (List.range q).reverse.find? (fun k => insns[k]!.mn == "cmp") with
+      | some ck =>
+        let fk := insns[ck]!
+        let csubs := (useToVer.get? ck).getD []
+        match (fk.ops.splitOn ",").map (·.trimAscii.toString) with
+        | [x, y] =>
+          let cmp := if op == "i<" then "<" else if op == "i<=" then "<=" else if op == "i>" then ">" else ">="
+          some s!"(int32_t)({subOf ck csubs x}) {cmp} (int32_t)({subOf ck csubs y})"
+        | _ => none
+      | none => none
+    else if op == "s<" ∨ op == "s>=" then
       let sfSetters := ["neg","add","sub","and","or","xor","inc","dec","imul","shr","sar","shl"]
       match (List.range q).reverse.find? (fun k => sfSetters.contains insns[k]!.mn) with
       | some ck =>
@@ -706,6 +721,10 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     else if mn == "seta" ∨ mn == "setnbe" then some ">"
     else if mn == "sete" ∨ mn == "setz" then some "=="
     else if mn == "setne" ∨ mn == "setnz" then some "!="
+    else if mn == "setl" ∨ mn == "setnge" then some "i<"
+    else if mn == "setle" ∨ mn == "setng" then some "i<="
+    else if mn == "setg" ∨ mn == "setnle" then some "i>"
+    else if mn == "setge" ∨ mn == "setnl" then some "i>="
     else none
   -- `setcc r8` ⇒ `r8 := (cond) ? 1 : 0` (a 0/1 byte, typically widened by `movzx`).
   let setccRhs : Nat → Ins → Option String := fun q ins =>
