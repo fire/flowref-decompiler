@@ -201,10 +201,9 @@ def fuse (argRegs : List String) (cmp : Option (String × String)) (facts : Path
       -- Track test for potential fact extraction (Gap 1)
       -- `test reg, reg` followed by `je` means reg == 0 on taken edge, reg != 0 on fallthrough
       let ops := (i.ops.splitOn ",").map (·.trimAscii.toString)
-      let cmpReg : Option String := match ops with
-        | [r1, r2] => if r1 == r2 then Option.some (canonReg r1) else Option.none
-        | _ => Option.none
-      fuse argRegs cmpReg facts rest
+      match ops with
+      | [r1, r2] => if r1 == r2 then fuse argRegs (Option.some (canonReg r1)) facts rest else fuse argRegs Option.none facts rest
+      | _ => fuse argRegs Option.none facts rest
     else if i.mn == "call" then
       let callee := i.ops.trimAscii.toString
       (fuse argRegs Option.none facts rest).map (SInsn.call callee argRegs :: ·)
