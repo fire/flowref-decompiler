@@ -68,6 +68,7 @@ for f in $TRAINING_FUNCS; do
 done
 
 # ── Parquet snapshot ──────────────────────────────────────────────────────────
+cd "$root" || exit 1
 lake -d "$root" build flowref-training-parquet
 "$root/.lake/build/bin/flowref-training-parquet" "$BINDIR/manifest.tsv" "$RESULTS" "$PARQUET_DIR"
 
