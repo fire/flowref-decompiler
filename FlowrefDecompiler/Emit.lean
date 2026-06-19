@@ -133,9 +133,14 @@ def renderExprC (a : A) (i : Ins) (subs : List (String × String)) : String :=
     else if i.mn == "div" ∨ i.mn == "idiv" then
       -- div reg: divides edx:eax by reg, quotient in eax, remainder in edx
       -- For the simple case where edx is zero (common pattern), emit as eax / reg
-      -- The 'eax' here will be substituted with the SSA name via the subst function
+      -- The 'eax' here needs to be substituted with the SSA name via the subst function
       match (i.ops.splitOn ",").map (·.trimAscii.toString) with
-      | [reg] => s!"eax / {reg}"
+      | [reg] => 
+        -- Use the substituted value of eax (the dividend) and the substituted divisor
+        let divReg := subst reg
+        -- Find the SSA name for eax at this instruction index
+        let dividendExpr := "eax"  -- will be substituted below
+        s!"{dividendExpr} / {divReg}"
       | _ => rhsText a i
     else if (i.mn == "movzx" ∨ i.mn == "movsx") ∧ ¬ hasMem i.ops then
       if i.mn == "movzx" then

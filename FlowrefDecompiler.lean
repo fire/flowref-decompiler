@@ -211,12 +211,14 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
     | some r => some r
     | none   => match arch with
                 | .x86 => if i.mn == "mul" ∧ ¬ (firstTok i).any (· == '[') then some "edx"
+                          else if i.mn == "div" ∨ i.mn == "idiv"
+                               ∧ ¬ (firstTok i).any (· == '[')
+                          then some "eax"  -- div/idiv: quotient in eax, remainder in edx
                           else if (i.mn.startsWith "cmov" ∨ i.mn.startsWith "set"
                                ∨ i.mn == "neg" ∨ i.mn == "not"
                                ∨ i.mn == "adc" ∨ i.mn == "sbb"
                                ∨ i.mn == "ror" ∨ i.mn == "rol" ∨ i.mn == "bswap"
-                               ∨ i.mn == "bsf" ∨ i.mn == "rep bsf" ∨ i.mn == "tzcnt" ∨ i.mn == "bsr" ∨ i.mn == "lzcnt"
-                               ∨ i.mn == "div" ∨ i.mn == "idiv")
+                               ∨ i.mn == "bsf" ∨ i.mn == "rep bsf" ∨ i.mn == "tzcnt" ∨ i.mn == "bsr" ∨ i.mn == "lzcnt")
                                ∧ ¬ (firstTok i).any (· == '[')
                           then some (firstTok i) else none
                 | _    => none
