@@ -1150,7 +1150,8 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
      -- xchg ax,ax / xchg rax,rax: 2/3-byte alignment NOPs. Memory xchg is
      -- blocked by hasMemOp (contains "[").
      -- jmp: unconditional branch, modeled structurally by the CFG emitter.
-     "xchg", "jmp"].contains mn
+     -- div/idiv: division with zero-divisor guard (Gap 1)
+     "xchg", "jmp", "div", "idiv"].contains mn
     || mn.startsWith "nop"
     || (cmovCondOp mn).isSome || (setCondOp mn).isSome
   -- A conditional move is faithful ONLY if `cmovRhs` can actually build its
