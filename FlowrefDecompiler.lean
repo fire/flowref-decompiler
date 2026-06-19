@@ -1248,9 +1248,9 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- This is the compiler's reciprocal-multiply idiom for division by a constant.
   -- The magic constant and shift amount encode the divisor (e.g., div 10 uses 0xcccccccd, shift 23).
   -- We recognize this pattern and treat it as a faithful division operation.
-  def isMagicDivPattern (idx : Nat) : Bool × Option Nat :=  -- returns (isPattern, ?shiftAmount)
-    if idx + 1 >= nI then (false, none)
-    else if insns[idx]!.mn != "imul" then (false, none)
+  def isMagicDivPattern (idx : Nat) : Bool :=
+    if idx + 1 >= nI then false
+    else if insns[idx]!.mn != "imul" then false
     else
       -- Check if this is a 64-bit imul (has r64 registers like rax, rdi, etc.)
       let ops := (insns[idx]!.ops.splitOn ",").map (·.trimAscii.toString)
@@ -1259,7 +1259,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
         -- 2-operand imul: imul src, dst (dst = src * dst, result in dst:overflow)
         let dstReg := dst.trimAscii.toString
         let is64BitImul := dstReg.startsWith "r" && dstReg.length >= 2  -- rax, rdi, etc.
-        if !is64BitImul then (false, none)
+        if !is64BitImul then false
         else
           -- Check if next instruction is shr with constant
           if insns[idx+1]!.mn == "shr" then
@@ -1267,27 +1267,17 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
             match nextOps with
             | [shiftAmt, nextDst] =>
               let nextDstReg := nextDst.trimAscii.toString
-              -- Check if shift amount is a constant and target matches
-              if shiftAmt.startsWith "0x" ∨ shiftAmt.all Char.isDigit then
-                if canonReg dstReg == canonReg nextDstReg then
-                  -- Parse shift amount
-                  match Nat.ofString? shiftAmt with
-                  | some shift => (true, some shift)
-                  | none => (false, none)
-                else (false, none)
-              else
-                match Nat.ofString? ((shiftAmt.splitOn "0x").getLastD "0") with
-                | some shift => if canonReg dstReg == canonReg nextDstReg then (true, some shift) else (false, none)
-                | none => (false, none)
-            | _ => (false, none)
-          else (false, none)
-      | _ => (false, none)
+              -- Check if shift amount is a constant (decimal or hex) and target matches
+              let isConst := shiftAmt.all Char.isDigit || shiftAmt.startsWith "0x"
+              isConst && canonReg dstReg == canonReg nextDstReg
+            | _ => false
+          else false
+      | _ => false
   
   let magicDivsModeled : Bool := (Array.range nI).all (fun i =>
     if insns[i]!.mn == "imul" then
       -- This imul must be part of a recognized magic div pattern
-      let (isPattern, _) := isMagicDivPattern i
-      isPattern
+      isMagicDivPattern i
     else true)
   
   let allModeled : Bool := a != .x86 ||
