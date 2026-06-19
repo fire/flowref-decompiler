@@ -1193,34 +1193,12 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- width keys + latest-def-before-use fallback). Each cmov must still resolve
   -- (`cmovsModeled`); chains of any length lift soundly (e.g. med3 = 4 cmovs).
   
-  -- Path-fact lattice for Gap 1 (div guard): track non-zero facts from test+je/jne.
+  -- Path-fact lattice for Gap 1 (div guard): check for test+je pattern.
   -- A `test reg, reg` followed by `je target` proves `reg != 0` on the fallthrough.
   -- A `div reg` / `idiv reg` requires that `reg != 0` at that instruction index.
-  -- Build a map of (instruction index) → (set of registers provably non-zero).
-  let pathFacts : Array (Std.HashSet String) := Array.replicate nI {}
-  let factsWithGuards : Array (Std.HashSet String) :=
-    (Array.range nI).map (fun i =>
-      let ins := insns[i]!
-      -- Check for test+je pattern: test reg,reg followed by je
-      if ins.mn == "test" then
-        match (ins.ops.splitOn ",").map (·.trimAscii.toString) with
-        | [a, b] =>
-          let canonA := canonReg (a.trimAscii.toString)
-          let canonB := canonReg (b.trimAscii.toString)
-          if canonA == canonB then
-            -- Look for je in the next instruction
-            if i + 1 < nI ∧ insns[i+1]!.mn == "je" then
-              -- On fallthrough (after je), reg is provably non-zero
-              (Array.range nI).map (fun j =>
-                if j > i + 1 then (pathFacts[j]!).insert canonA else pathFacts[j]!)
-            else pathFacts
-          else pathFacts
-        | _ => pathFacts
-      else pathFacts) |>.getLastD {}
-  
-  -- Check that all div/idiv instructions have provably non-zero divisors
+  -- For now, accept div if there's a test+je guard earlier in the function.
   let divsModeled : Bool := (Array.range nI).all (fun i =>
-    if insns[i]!.mn != "div" ∧ insns[i]!.mn != "idiv" then true
+    if insns[i]!.mn != "div" && insns[i]!.mn != "idiv" then true
     else
       -- Extract the divisor register from the instruction
       match (insns[i]!.ops.splitOn ",").head? with
@@ -1230,13 +1208,12 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
         | [dst] =>
           -- div reg: divisor is in reg
           let divisorReg := canonReg dst
-          -- Check if this register is provably non-zero at this point
-          -- For now, accept if there's a test+je guard earlier in the same block
+          -- Check if there's a test+je guard earlier in the function
           (Array.range i).any (fun j =>
-            insns[j]!.mn == "test" ∧
+            insns[j]!.mn == "test" &&
             match (insns[j]!.ops.splitOn ",").map (·.trimAscii.toString) with
-            | [a, b] => canonReg a == divisorReg ∧ canonReg b == divisorReg ∧
-                        j + 1 < nI ∧ insns[j+1]!.mn == "je"
+            | [a, b] => canonReg a == divisorReg && canonReg b == divisorReg &&
+                        j + 1 < nI && insns[j+1]!.mn == "je"
             | _ => false)
         | _ => false
       | none => false)
