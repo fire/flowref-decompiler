@@ -1243,8 +1243,55 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
         | _ => false
       | none => false)
   
+  -- Gap 2: 64-bit magic-constant division (compound-pattern recognizer)
+  -- Pattern: imul r64_src, r64_dst (where dst is typically rdi/rax) followed by shr $k, r64_dst
+  -- This is the compiler's reciprocal-multiply idiom for division by a constant.
+  -- The magic constant and shift amount encode the divisor (e.g., div 10 uses 0xcccccccd, shift 23).
+  -- We recognize this pattern and treat it as a faithful division operation.
+  def isMagicDivPattern (idx : Nat) : Bool × Option Nat :=  -- returns (isPattern, ?shiftAmount)
+    if idx + 1 >= nI then (false, none)
+    else if insns[idx]!.mn != "imul" then (false, none)
+    else
+      -- Check if this is a 64-bit imul (has r64 registers like rax, rdi, etc.)
+      let ops := (insns[idx]!.ops.splitOn ",").map (·.trimAscii.toString)
+      match ops with
+      | [src, dst] =>
+        -- 2-operand imul: imul src, dst (dst = src * dst, result in dst:overflow)
+        let dstReg := dst.trimAscii.toString
+        let is64BitImul := dstReg.startsWith "r" && dstReg.length >= 2  -- rax, rdi, etc.
+        if !is64BitImul then (false, none)
+        else
+          -- Check if next instruction is shr with constant
+          if insns[idx+1]!.mn == "shr" then
+            let nextOps := (insns[idx+1]!.ops.splitOn ",").map (·.trimAscii.toString)
+            match nextOps with
+            | [shiftAmt, nextDst] =>
+              let nextDstReg := nextDst.trimAscii.toString
+              -- Check if shift amount is a constant and target matches
+              if shiftAmt.startsWith "0x" ∨ shiftAmt.all Char.isDigit then
+                if canonReg dstReg == canonReg nextDstReg then
+                  -- Parse shift amount
+                  match Nat.ofString? shiftAmt with
+                  | some shift => (true, some shift)
+                  | none => (false, none)
+                else (false, none)
+              else
+                match Nat.ofString? ((shiftAmt.splitOn "0x").getLastD "0") with
+                | some shift => if canonReg dstReg == canonReg nextDstReg then (true, some shift) else (false, none)
+                | none => (false, none)
+            | _ => (false, none)
+          else (false, none)
+      | _ => (false, none)
+  
+  let magicDivsModeled : Bool := (Array.range nI).all (fun i =>
+    if insns[i]!.mn == "imul" then
+      -- This imul must be part of a recognized magic div pattern
+      let (isPattern, _) := isMagicDivPattern i
+      isPattern
+    else true)
+  
   let allModeled : Bool := a != .x86 ||
-    (insns.all (fun i => modeledX86 i.mn) && cmovsModeled && setccModeled && mulModeled && divsModeled)
+    (insns.all (fun i => modeledX86 i.mn) && cmovsModeled && setccModeled && mulModeled && divsModeled && magicDivsModeled)
   -- First faithful multi-block bridge: a 3-block branch diamond whose only
   -- control-flow effect is selecting a value.  The original case selected the
   -- returned register directly; the φ case selects a non-return register at the
