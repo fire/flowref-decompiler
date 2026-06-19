@@ -14,7 +14,7 @@ namespace FlowrefDecompiler.IL
 abbrev Word := BitVec 32
 
 /-- The operations flowref already lifts for leaf functions. -/
-inductive Op | add | sub | mul | band | bor | bxor | shl | ult
+inductive Op | add | sub | mul | band | bor | bxor | shl | ult | udiv | sdiv
   deriving DecidableEq, Repr
 
 /-- An operand: a function argument, an earlier SSA slot, or an immediate.
@@ -45,6 +45,8 @@ structure Prog where
   | .bxor, x, y => x ^^^ y
   | .shl,  x, y => x <<< y
   | .ult,  x, y => if x.ult y then 1 else 0   -- unsigned compare → C-style 0/1
+  | .udiv, x, y => x / y                       -- unsigned division (divisor != 0 required)
+  | .sdiv, x, y => x / y                       -- signed division (same as / for BitVec)
 
 @[simp] def Atom.eval (args slots : List Word) : Atom → Word
   | .arg i  => args.getD i 0
@@ -127,6 +129,7 @@ open LeanSlang
 @[simp] def Op.slangOp : Op → String
   | .add => "+" | .sub => "-" | .mul => "*"
   | .band => "&" | .bor => "|" | .bxor => "^" | .shl => "<<" | .ult => "<"
+  | .udiv => "/" | .sdiv => "/"
 
 /-- The Slang parameter name for argument `i`. -/
 @[simp] def argName (i : Nat) : String := "a" ++ toString i

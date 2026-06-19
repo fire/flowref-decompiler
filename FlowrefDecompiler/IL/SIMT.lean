@@ -58,7 +58,7 @@ inductive Atom
 /-- Scalar/vector ALU vocabulary. Keep tensor operations separate so ordinary ALU
 proofs do not accidentally depend on backend matrix-intrinsic behavior. -/
 inductive Alu
-  | add | sub | mul | band | bor | bxor | shl | lshr | ult | eq
+  | add | sub | mul | band | bor | bxor | shl | lshr | ult | eq | udiv | sdiv
   deriving Repr, DecidableEq
 
 @[simp] def Alu.apply : Alu → Word → Word → Word
@@ -72,6 +72,8 @@ inductive Alu
   | .lshr, x, y => x >>> y
   | .ult,  x, y => if x.ult y then 1 else 0
   | .eq,   x, y => if x = y then 1 else 0
+  | .udiv, x, y => x / y
+  | .sdiv, x, y => x / y
 
 /-- Minimal expression algebra. `intrinsic` is for pure backend intrinsics
 including WMMA-like operations; general calls stay out of the core. -/
@@ -183,6 +185,8 @@ def fromSoundOp : FlowrefDecompiler.IL.Op → Alu
   | .bxor => .bxor
   | .shl  => .shl
   | .ult  => .ult
+  | .udiv => .udiv
+  | .sdiv => .sdiv
 
 /-- Embed the existing sound RHS fragment. -/
 def fromSoundRhs : FlowrefDecompiler.IL.Rhs → Expr

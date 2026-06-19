@@ -41,6 +41,7 @@ def canonReg (r : String) : String :=
 def binOpOf : String → Option Op
   | "add" => some .add | "sub" => some .sub
   | "imul" | "mul" => some .mul
+  | "div" => some .udiv | "idiv" => some .sdiv
   | "and" => some .band | "or" => some .bor | "xor" => some .bxor
   | "shl" | "sal" => some .shl
   | "cmp" => some .ult         -- a compare; the IL models it as `< → 0/1`
