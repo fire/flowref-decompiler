@@ -1192,8 +1192,57 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   -- correctly now that the single-block reaching-def is cmov-aware (canonical
   -- width keys + latest-def-before-use fallback). Each cmov must still resolve
   -- (`cmovsModeled`); chains of any length lift soundly (e.g. med3 = 4 cmovs).
+  
+  -- Path-fact lattice for Gap 1 (div guard): track non-zero facts from test+je/jne.
+  -- A `test reg, reg` followed by `je target` proves `reg != 0` on the fallthrough.
+  -- A `div reg` / `idiv reg` requires that `reg != 0` at that instruction index.
+  -- Build a map of (instruction index) → (set of registers provably non-zero).
+  let pathFacts : Array (Std.HashSet String) := Array.replicate nI {}
+  let factsWithGuards : Array (Std.HashSet String) :=
+    (Array.range nI).map (fun i =>
+      let ins := insns[i]!
+      -- Check for test+je pattern: test reg,reg followed by je
+      if ins.mn == "test" then
+        match (ins.ops.splitOn ",").map (·.trimAscii.toString) with
+        | [a, b] =>
+          let canonA := canonReg (a.trimAscii.toString)
+          let canonB := canonReg (b.trimAscii.toString)
+          if canonA == canonB then
+            -- Look for je in the next instruction
+            if i + 1 < nI ∧ insns[i+1]!.mn == "je" then
+              -- On fallthrough (after je), reg is provably non-zero
+              (Array.range nI).map (fun j =>
+                if j > i + 1 then (pathFacts[j]!).insert canonA else pathFacts[j]!)
+            else pathFacts
+          else pathFacts
+        | _ => pathFacts
+      else pathFacts) |>.getLastD {}
+  
+  -- Check that all div/idiv instructions have provably non-zero divisors
+  let divsModeled : Bool := (Array.range nI).all (fun i =>
+    if insns[i]!.mn != "div" ∧ insns[i]!.mn != "idiv" then true
+    else
+      -- Extract the divisor register from the instruction
+      match (insns[i]!.ops.splitOn ",").head? with
+      | some opsStr =>
+        let ops := (opsStr.splitOn ",").map (·.trimAscii.toString)
+        match ops with
+        | [dst] =>
+          -- div reg: divisor is in reg
+          let divisorReg := canonReg dst
+          -- Check if this register is provably non-zero at this point
+          -- For now, accept if there's a test+je guard earlier in the same block
+          (Array.range i).any (fun j =>
+            insns[j]!.mn == "test" ∧
+            match (insns[j]!.ops.splitOn ",").map (·.trimAscii.toString) with
+            | [a, b] => canonReg a == divisorReg ∧ canonReg b == divisorReg ∧
+                        j + 1 < nI ∧ insns[j+1]!.mn == "je"
+            | _ => false)
+        | _ => false
+      | none => false)
+  
   let allModeled : Bool := a != .x86 ||
-    (insns.all (fun i => modeledX86 i.mn) && cmovsModeled && setccModeled && mulModeled)
+    (insns.all (fun i => modeledX86 i.mn) && cmovsModeled && setccModeled && mulModeled && divsModeled)
   -- First faithful multi-block bridge: a 3-block branch diamond whose only
   -- control-flow effect is selecting a value.  The original case selected the
   -- returned register directly; the φ case selects a non-return register at the
