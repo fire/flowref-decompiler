@@ -195,13 +195,17 @@ def fuse (argRegs : List String) (cmp : Option (String × String)) (facts : Path
   | []        => some []
   | i :: rest =>
     if i.mn == "cmp" then
+      -- Track cmp for potential fact extraction (Gap 1)
       (cmpOps i).bind (fun ab => fuse argRegs (some ab) facts rest)
+    else if i.mn == "test" then
+      -- Track test for potential fact extraction (Gap 1)
+      -- `test reg, reg` followed by `je` means reg == 0 on taken edge, reg != 0 on fallthrough
+      let ops := (i.ops.splitOn ",").map (·.trimAscii.toString)
+      let cmpReg := match ops with
+        | [r1, r2] => if r1 == r2 then some (canonReg r1) else none
+        | _ => none
+      (fuse argRegs cmpReg facts rest)
     else if i.mn == "call" then
-      -- A `call <callee>` forwards this function's parameter registers to the
-      -- callee (the faithful model for a forwarding/partial-application leaf such
-      -- as `apply_f(x)=f(x)`). The callee result lands
-      -- in `rax` (SInsn.call). The callee's denotation is the uninterpreted
-      -- summary `ce`, so the lift is correct for ALL callees.
       let callee := i.ops.trimAscii.toString
       (fuse argRegs none facts rest).map (SInsn.call callee argRegs :: ·)
     else if i.mn.startsWith "set" then
@@ -212,24 +216,25 @@ def fuse (argRegs : List String) (cmp : Option (String × String)) (facts : Path
       match cmp, (i.ops.splitOn ",").map (·.trimAscii.toString) with
       | some ab, [d, s] => (lowerCmov i.mn d s ab).bind (fun pre => (fuse argRegs none facts rest).map (pre ++ ·))
       | _, _ => none
-    else if i.mn == "test" then
-      -- Track test instructions for path facts (Gap 1)
-      -- `test r,r` followed by `jne` means r != 0 on taken edge
-      (insToS i).bind (fun ss => (fuse argRegs none facts rest).map (ss ++ ·))
     else if i.mn.startsWith "j" then
-      -- Branch instructions: extract path facts
-      let newFacts := facts  -- TODO: update facts based on branch condition
+      -- Branch instructions: extract path facts from preceding cmp/test (Gap 1)
+      -- For `cmp reg, 0` or `test reg, reg` followed by `je`, the fallthrough has fact (reg != 0)
+      let newFacts : PathFactLattice := match cmp with
+        | some reg =>  -- test reg, reg
+          match i.mn with
+          | "je" | "jz" => PathFactLattice.add facts (PathFact.nonzero reg)  -- fallthrough: reg != 0
+          | "jne" | "jnz" => PathFactLattice.add facts (PathFact.zero reg)   -- fallthrough: reg == 0
+          | _ => facts
+        | none => facts  -- no preceding cmp/test, no new facts
       (insToS i).bind (fun ss => (fuse argRegs none newFacts rest).map (ss ++ ·))
     else
       -- Check for division and verify divisor is nonzero (Gap 1 faithful gate)
       match isDivAndDivisor i with
       | some divisorReg =>
         if facts.nonzero? divisorReg then
-          -- Divisor is provably nonzero, emit division
           (insToS i).bind (fun ss => (fuse argRegs none facts rest).map (ss ++ ·))
         else
-          -- Divisor is not provably nonzero, refuse in strict mode
-          none
+          none  -- Divisor is not provably nonzero, refuse in strict mode
       | none =>
         (insToS i).bind (fun ss => (fuse argRegs none facts rest).map (ss ++ ·))
 
