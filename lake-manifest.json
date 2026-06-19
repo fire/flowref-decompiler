@@ -5,7 +5,7 @@
    "type": "git",
    "subDir": null,
    "scope": "",
-   "rev": "d471ef103a1a4bd8a5ba6c29d9ffb8b736c4dd2b",
+   "rev": "fa61794c1197b89958242a0e4132b74b1560fff5",
    "name": "lean_duckdb",
    "manifestFile": "lake-manifest.json",
    "inputRev": "main",
