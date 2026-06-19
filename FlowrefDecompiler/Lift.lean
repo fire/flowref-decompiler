@@ -201,32 +201,32 @@ def fuse (argRegs : List String) (cmp : Option (String × String)) (facts : Path
       -- Track test for potential fact extraction (Gap 1)
       -- `test reg, reg` followed by `je` means reg == 0 on taken edge, reg != 0 on fallthrough
       let ops := (i.ops.splitOn ",").map (·.trimAscii.toString)
-      let cmpReg := match ops with
-        | [r1, r2] => if r1 == r2 then some (canonReg r1) else none
-        | _ => none
-      (fuse argRegs cmpReg facts rest)
+      let cmpReg : Option String := match ops with
+        | [r1, r2] => if r1 == r2 then Option.some (canonReg r1) else Option.none
+        | _ => Option.none
+      fuse argRegs cmpReg facts rest
     else if i.mn == "call" then
       let callee := i.ops.trimAscii.toString
-      (fuse argRegs none facts rest).map (SInsn.call callee argRegs :: ·)
+      (fuse argRegs Option.none facts rest).map (SInsn.call callee argRegs :: ·)
     else if i.mn.startsWith "set" then
       match cmp, (i.ops.splitOn ",").map (·.trimAscii.toString) with
-      | some ab, [d] => (lowerSetcc i.mn d ab).bind (fun pre => (fuse argRegs none facts rest).map (pre ++ ·))
-      | _, _ => none
+      | some ab, [d] => (lowerSetcc i.mn d ab).bind (fun pre => (fuse argRegs Option.none facts rest).map (pre ++ ·))
+      | _, _ => Option.none
     else if i.mn.startsWith "cmov" then
       match cmp, (i.ops.splitOn ",").map (·.trimAscii.toString) with
-      | some ab, [d, s] => (lowerCmov i.mn d s ab).bind (fun pre => (fuse argRegs none facts rest).map (pre ++ ·))
-      | _, _ => none
+      | some ab, [d, s] => (lowerCmov i.mn d s ab).bind (fun pre => (fuse argRegs Option.none facts rest).map (pre ++ ·))
+      | _, _ => Option.none
     else if i.mn.startsWith "j" then
       -- Branch instructions: extract path facts from preceding cmp/test (Gap 1)
       -- For `cmp reg, 0` or `test reg, reg` followed by `je`, the fallthrough has fact (reg != 0)
       let newFacts : PathFactLattice := match cmp with
-        | some reg =>  -- test reg, reg
+        | Option.some reg =>  -- test reg, reg
           match i.mn with
-          | "je" | "jz" => PathFactLattice.add facts (PathFact.nonzero reg)  -- fallthrough: reg != 0
-          | "jne" | "jnz" => PathFactLattice.add facts (PathFact.zero reg)   -- fallthrough: reg == 0
+          | "je" | "jz" => PathFactLattice.add facts (IL.PathFact.nonzero reg)  -- fallthrough: reg != 0
+          | "jne" | "jnz" => PathFactLattice.add facts (IL.PathFact.zero reg)   -- fallthrough: reg == 0
           | _ => facts
-        | none => facts  -- no preceding cmp/test, no new facts
-      (insToS i).bind (fun ss => (fuse argRegs none newFacts rest).map (ss ++ ·))
+        | Option.none => facts  -- no preceding cmp/test, no new facts
+      (insToS i).bind (fun ss => (fuse argRegs Option.none newFacts rest).map (ss ++ ·))
     else
       -- Check for division and verify divisor is nonzero (Gap 1 faithful gate)
       match isDivAndDivisor i with
