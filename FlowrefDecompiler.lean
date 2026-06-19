@@ -858,6 +858,22 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
         | none => (sysvParamForReg pm.count "eax").getD "eax"
       some s!"(uint32_t)(((uint64_t){lhs} * (uint64_t){subOf q subs src}) >> 32)"
     | _, _ => none
+  
+  -- div reg: divides edx:eax by reg, quotient in eax, remainder in edx
+  -- For the simple case where edx is zero (common pattern), emit as eax / reg
+  let divRhs : Nat → Ins → List (String × String) → Option String := fun q ins subs =>
+    match ins.mn with
+    | "div" | "idiv" =>
+      match (ins.ops.splitOn ",").map (·.trimAscii.toString) with
+      | [reg] =>
+        let dividend :=
+          match (defSites.filter (fun p => canonReg p.2 == "eax" && p.1 < q)).back? with
+          | some (di, _) => cName ((ssaName.get? di).getD "eax")
+          | none => (sysvParamForReg pm.count "eax").getD "eax"
+        let divisor := subOf q subs reg
+        some s!"({dividend}) / ({divisor})"
+      | _ => none
+    | _ => none
 
   let stmtOf : Nat → Option String := fun (q : Nat) =>
     let ins := insns[q]!
@@ -887,6 +903,7 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
                       else if ins.mn == "bswap" then (bswapRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
                       else if ins.mn == "adc" ∨ ins.mn == "sbb" then (carryRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
                       else if ins.mn == "mul" then (mulRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
+                      else if ins.mn == "div" ∨ ins.mn == "idiv" then (divRhs q ins subs).getD (applyCdecl (renderExprC a ins subs))
                       else applyCdecl (renderExprC a ins subs)
           -- Self-move canonicalization (`mov edi,edi`) is a zero-extension idiom.
           -- Reaching-def search sees the destination clobber and can leave the source
