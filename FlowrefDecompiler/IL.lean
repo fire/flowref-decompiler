@@ -1124,9 +1124,9 @@ def PathFactLattice.zero? (l : PathFactLattice) (reg : String) : Bool :=
     For `test r,r; je label`, the fallthrough edge has fact (r != 0). -/
 def extractBranchFacts (mn : String) (ops : String) : List (PathFact × Bool) :=
   -- Returns list of (fact, isTakenEdge) pairs
-  let reg := (ops.splitOn ",").getD 0 "" |>.trimAscii.toString |>.toString
+  let reg := (ops.splitOn ",").getD 0 "" |>.trimAscii.toString
   match mn with
-  | "jne" | "jne" => [(.nonzero reg, true)]  -- taken: reg != 0
+  | "jne" => [(.nonzero reg, true)]  -- taken: reg != 0
   | "je"  | "jz"  => [(.nonzero reg, false)] -- fallthrough: reg != 0
   | "jb"  | "jae" => []  -- unsigned comparisons, not modeled yet
   | _ => []
