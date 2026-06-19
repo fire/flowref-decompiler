@@ -261,7 +261,12 @@ def emitC (a : A) (bits : Bits) (insns : Array Ins) (fnVa : Nat) : IO (String ×
   let mut useToPhiDefs : Std.HashMap Nat (List (String × List Nat)) := {}
   let mut trace : Array TraceEntry := #[]
   for j in [0:nI] do
-    let usedRegs := readsRegs a insns[j]!
+    let ins := insns[j]!
+    -- Add implicit reads for div/idiv: eax (dividend) and edx (high part)
+    -- These are not tracked by readsRegs but are consumed by the instruction.
+    let divImplicitReads : List String :=
+      if ins.mn == "div" ∨ ins.mn == "idiv" then ["eax", "edx"] else []
+    let usedRegs := (readsRegs a ins) ++ divImplicitReads
     for r in usedRegs do
       -- iterative-deepening, plausible-driven reaching-def resolution.
       let (defsR, _lvl, te) ← resolveReachingDef insns addr2idx a j r
