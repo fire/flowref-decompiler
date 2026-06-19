@@ -1075,4 +1075,65 @@ theorem step_cbranch_sets_pc
 
 end Complete
 
+/-! ## Path-fact lattice for Gap 1: proving divisor != 0
+
+This implements the path-fact lattice design from OPEN_GAPS.md Gap 1.
+The lattice tracks facts like "register r != 0" along control flow paths.
+Each conditional contributes facts on its taken and fallthrough edges.
+The division renderer consumes these facts to prove the divisor is nonzero.
+
+Design:
+- PathFact is a set of (register, fact) pairs
+- Facts are: nonzero (r != 0), zero (r == 0), or unknown
+- Facts are propagated along CFG edges from branch instructions
+- The faithful gate checks if the divisor has a "nonzero" fact before emitting division
+-/
+
+/-- A path fact about a register's value. -/
+inductive PathFact
+  | nonzero (reg : String)  -- reg != 0
+  | zero    (reg : String)  -- reg == 0
+  deriving DecidableEq, Repr
+
+/-- A lattice of path facts: bottom = unknown, top = known. -/
+structure PathFactLattice where
+  facts : List PathFact
+  deriving Repr
+
+/-- Empty lattice (bottom): no facts known. -/
+def PathFactLattice.bot : PathFactLattice := { facts := [] }
+
+/-- Add a fact to the lattice. -/
+def PathFactLattice.add (l : PathFactLattice) (f : PathFact) : PathFactLattice :=
+  { facts := f :: l.facts.filter (fun f' => f' ≠ f) }
+
+/-- Check if a fact is in the lattice. -/
+def PathFactLattice.has (l : PathFactLattice) (f : PathFact) : Bool :=
+  l.facts.any (· = f)
+
+/-- Check if a register is provably nonzero. -/
+def PathFactLattice.nonzero? (l : PathFactLattice) (reg : String) : Bool :=
+  l.has (.nonzero reg)
+
+/-- Check if a register is provably zero. -/
+def PathFactLattice.zero? (l : PathFactLattice) (reg : String) : Bool :=
+  l.has (.zero reg)
+
+/-- Extract path facts from a branch instruction.
+    For `test r,r; jne label`, the taken edge has fact (r != 0).
+    For `test r,r; je label`, the fallthrough edge has fact (r != 0). -/
+def extractBranchFacts (mn : String) (ops : String) : List (PathFact × Bool) :=
+  -- Returns list of (fact, isTakenEdge) pairs
+  let reg := (ops.splitOn ",").getD 0 "" |>.trimAscii.toString |>.toString
+  match mn with
+  | "jne" | "jne" => [(.nonzero reg, true)]  -- taken: reg != 0
+  | "je"  | "jz"  => [(.nonzero reg, false)] -- fallthrough: reg != 0
+  | "jb"  | "jae" => []  -- unsigned comparisons, not modeled yet
+  | _ => []
+
+/-- Merge path facts from two control flow paths (join operation).
+    A fact is preserved only if it's in both paths (meet operation for safety). -/
+def PathFactLattice.join (l1 l2 : PathFactLattice) : PathFactLattice :=
+  { facts := (l1.facts.filter fun f => l2.has f) }
+
 end FlowrefDecompiler.IL
