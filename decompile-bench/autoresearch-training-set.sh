@@ -19,6 +19,19 @@ PARQUET_DIR="$OUTDIR/parquet"
 
 mkdir -p "$OUTDIR"
 
+# ── build the decompiler from source FIRST ────────────────────────────────────
+# Critical: the oracle sweep below runs $FR, which defaults to the prebuilt
+# binary at .lake/build/bin. If we don't rebuild, an edit that breaks the
+# *source* (a syntax error or an unsound gate) is measured against a STALE
+# binary — silently scoring and committing broken source as "69/69". Build
+# first and abort the whole run if the build fails, so we never commit source
+# that does not compile. (See TOMBSTONES.md: "Gap-2 magic-constant division".)
+echo "=== building flowref-decompiler from source ==="
+if ! lake -d "$root" build flowref-decompiler flowref-equiv; then
+  echo "ABORT: source build failed — refusing to measure a stale binary or commit" >&2
+  exit 1
+fi
+
 # ── materialise training binaries ────────────────────────────────────────────
 echo "=== materialising binaries ==="
 "$here/build-training-binaries.sh" "$BINDIR" >/tmp/flowref-build-training.$$.log 2>&1

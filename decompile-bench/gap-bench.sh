@@ -6,13 +6,15 @@
 # 2. Attempts faithful decompilation (strict mode)
 # 3. Reports: CLOSED (EQUIVALENT) vs OPEN (refusal or NOT-EQUIV)
 #
-# Gaps are ranked by impact (see OPEN_GAPS.md):
-#   1. Scalar div/idiv with zero-divisor preconditions (HIGH)
-#   2. 64-bit magic-constant division (MEDIUM)
-#   3. Chained branch-phi resolution (MEDIUM)
-#   4. Loop oracle proof (FORMAL)
-#   5. Constraint-based type propagation (FUTURE)
-#   6. Variable coalescing (READABILITY)
+# Gaps are ranked by impact (see OPEN_GAPS.md). The first two are CLOSED and now
+# live in the main training set (algo-bench.sh); they stay here as regression
+# guards:
+#   [closed] Scalar div/idiv with zero-divisor preconditions  -> div_guarded
+#   [closed] 64-bit magic-constant division (imul r64; shr $k) -> div_by_10
+#   1. Chained branch-phi resolution (MEDIUM)
+#   2. Loop oracle proof (FORMAL)
+#   3. Constraint-based type propagation (FUTURE)
+#   4. Variable coalescing (READABILITY)
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -66,29 +68,29 @@ test_gap() {
 echo "=== Gap benchmark (OPEN_GAPS.md) ==="
 echo ""
 
-# Gap 1: Scalar div/idiv with zero-divisor preconditions
+# [closed] Scalar div/idiv with zero-divisor preconditions (regression guard)
 # Fixture: a simple division with a guard that proves divisor != 0
-test_gap "Gap 1: div/idiv guard" "div_guarded" "EQUIVALENT" || true
+test_gap "closed: div/idiv guard" "div_guarded" "EQUIVALENT" || true
 
-# Gap 2: 64-bit magic-constant division  
-# Fixture: div_by_10 which uses imul r64; shr $k pattern
-test_gap "Gap 2: 64-bit magic div" "div_by_10" "EQUIVALENT" || true
+# [closed] 64-bit magic-constant division (regression guard)
+# Fixture: div_by_10 which uses the imul r64; shr $k reciprocal-multiply pattern
+test_gap "closed: 64-bit magic div" "div_by_10" "EQUIVALENT" || true
 
-# Gap 3: Chained branch-phi resolution
+# Gap 1: Chained branch-phi resolution
 # Fixture: nested_select_cfg or a new nested-diamond fixture
-test_gap "Gap 3: chained branch-phi" "nested_select_cfg" "EQUIVALENT" || true
+test_gap "Gap 1: chained branch-phi" "nested_select_cfg" "EQUIVALENT" || true
 
-# Gap 4: Loop oracle proof (formal, no runtime change)
+# Gap 2: Loop oracle proof (formal, no runtime change)
 # This is a proof gap, not a runtime gap — check that the loop fixtures still pass
-test_gap "Gap 4: loop oracle" "sum_to_n" "EQUIVALENT" || true
+test_gap "Gap 2: loop oracle" "sum_to_n" "EQUIVALENT" || true
 
-# Gap 5: Constraint-based type propagation (future, no strict impact yet)
+# Gap 3: Constraint-based type propagation (future, no strict impact yet)
 # No specific fixture — this is about C readability, not equivalence
-echo "  Gap 5: type propagation: PENDING (readability-only, no fixture)"
+echo "  Gap 3: type propagation: PENDING (readability-only, no fixture)"
 
-# Gap 6: Variable coalescing (readability-only)
+# Gap 4: Variable coalescing (readability-only)
 # No specific fixture — this is about C readability, not equivalence
-echo "  Gap 6: variable coalescing: PENDING (readability-only, no fixture)"
+echo "  Gap 4: variable coalescing: PENDING (readability-only, no fixture)"
 
 echo ""
 echo "=== Gap benchmark complete ==="

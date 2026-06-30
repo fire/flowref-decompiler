@@ -141,6 +141,30 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
   end-to-end. `LeanSlang.SIMT` proves data-parallel kernel correctness = per-thread
   body (`evalU32`) ∘ race-free non-interference.
 
+## Done — scalar division and the 64-bit reciprocal-multiply idiom (Gaps 1 & 2)
+
+- Gap 1 (guarded scalar division) closed. A `test r,r; je` (or `cmp r,0; je`)
+  guard that reaches a `div`/`idiv` proves the divisor is nonzero on the division
+  path; the faithful gate (`divsModeled`) accepts the division and the emitter
+  spells ordinary C `/`. `div_guarded` is in the training set and EQUIVALENT under
+  the full (60s) oracle — the guarded `if (!((a1 & a1) == 0)) { … a/b … }` shape.
+- Gap 2 (64-bit magic-constant division) closed soundly by **operand widening**,
+  not a divisor recognizer. The compiler lowers `x / 10` to `imul r64, 0xcccccccd;
+  shr r64, 35`. The 64-bit `imul` computes the full 128→64-bit product, but the
+  shared `rhsText` emitted `d * s` with `uint32_t`-typed SSA operands, so C did a
+  32-bit multiply and dropped the high half — wrong, and previously accepted as
+  "faithful" (a NOT-EQUIVALENT soundness hole on `div_by_10`). `renderExprC` now
+  widens a 2-operand `imul` whose destination is a 64-bit register to
+  `(uint64_t)(d) * (uint64_t)(s)`, faithful to `imul r64` (32-bit SSA reads
+  zero-extend, matching x86 zero-extension of 32-bit writes). `div_by_10` is in the
+  training set and EQUIVALENT under the full oracle. The readable `x / 10` surface
+  form is deferred; the closure signal (strict, no unsafe banner, EQUIVALENT) is met.
+- Build restored. A 19-Jun run of autoresearch "69/69" commits had committed source
+  that never compiled (the original broken Gap-2 attempt + a type-broken Gap-1
+  path-fact change in `Lift.lean`), because the harness scored a stale prebuilt
+  binary. Reverted/repaired; `autoresearch-training-set.sh` now builds-or-aborts
+  before measuring so non-compiling source can never be committed. See TOMBSTONES.md.
+
 ## Done — fixed soundness/correctness bugs (each caught by the bench/oracle)
 
 - cmp+cmov leaf silently mis-lifted under a "faithful" banner → gate whitelists
