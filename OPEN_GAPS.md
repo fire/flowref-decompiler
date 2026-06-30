@@ -3,7 +3,17 @@
 Each item states where the system stands. Completed items move to
 `CHANGELOG.md`; abandoned approaches move to `TOMBSTONES.md`.
 
-## Score (2026-06-18): 55/55 EQUIVALENT, SOUNDNESS 0
+## Score (2026-06-29): 71/71 EQUIVALENT, SOUNDNESS 0
+
+> Build health: the full `lake build` is green from source again. A run of
+> autoresearch "69/69" commits (19 Jun) had committed source that never compiled
+> (a broken Gap-2 magic-div gate + a type-broken Gap-1 path-fact change in
+> `Lift.lean`), because the harness scored a stale prebuilt binary. Reverted; the
+> harness now builds-or-aborts before committing. See TOMBSTONES.md.
+>
+> Gaps 1 (guarded scalar division) and 2 (64-bit magic-constant division) are now
+> CLOSED — `div_guarded` and `div_by_10` are in the training set and EQUIVALENT
+> under the full oracle. See CHANGELOG.md. The gaps below are renumbered.
 
 North star: point at a binary, get back compilable C you can read.
 
@@ -17,53 +27,13 @@ the refusal removable, and the oracle signal that marks the gap closed. The orde
 uses four signals: STRICT impact, dependency unblocking, soundness risk, then
 effort.
 
-1. Scalar `div`/`idiv` with zero-divisor preconditions. Impact: high STRICT
-   coverage and high soundness risk. `gcd`, `count_divisors`, `is_prime`, and
-   `lcm` require scalar division. The C emitter can spell `/` and `%`, but the
-   faithful gate must refuse `div` or `idiv` while the divisor can be zero because
-   C division by zero is undefined. The missing piece is a precondition channel
-   from branch facts into the instruction renderer, for example a proof that the
-   reaching divisor is nonzero on every path to the division. The closure signal
-   is a fixture whose guard dominates the division, emits C with an explicit
-   nonzero fact, and returns `EQUIVALENT` under the full oracle.
+> Closed: Gaps 1 (guarded scalar `div`/`idiv`) and 2 (64-bit magic-constant
+> division) are done — see CHANGELOG.md. The wider division-heavy fixtures
+> (`gcd`, `count_divisors`, `is_prime`, `lcm`, `pow_uint`) remain out of the
+> training set because they carry *other* unmodeled instructions or loop shapes;
+> the scalar-division and `imul r64; shr` idioms they need are now handled.
 
-   The selected design is a path-fact lattice attached to the same plausible CFG
-   witnesses used by `predOf` and the faithful gates. Each conditional contributes
-   facts on its taken and fallthrough edges, such as `x != 0` from `test x,x;
-   jne`, `x == 0` from `je`, and interval-like unsigned comparisons from `cmp`.
-   The division renderer consumes only the fact needed for the divisor at the
-   instruction index; it does not invent C-side guards. If the fact is absent,
-   strict mode keeps refusing. This keeps the faithful contract local: C contains
-   ordinary `/` or `%`, and the proof obligation is dominance of the nonzero fact
-   over the original binary path. The first fixture should be a tiny guarded
-   unsigned division, followed by `gcd` only after the path facts survive a loop
-   header and back edge.
-
-2. 64-bit magic-constant division. Impact: medium STRICT coverage, high
-   dependency value for arithmetic-heavy fixtures. `digit_count` is solved in
-   the current 32-bit faithful class, but `pow_uint` and `is_prime` use the
-   compiler's 64-bit reciprocal-multiply shape (`imul r64, r64; shr $k, r64`).
-   The current `Word` model is 32-bit, so this compound idiom has no faithful
-   semantic target. The missing piece is either a 64-bit `Word` lane for register
-   pairs and widened arithmetic or a recognized reciprocal-division theorem that
-   lowers the whole `imul`/`shr` slice as one proven expression. The closure
-   signal is a fixture that contains the magic-constant idiom, decompiles
-   strictly without an unsafe banner, and returns `EQUIVALENT`.
-
-   The selected design is the compound-pattern theorem first, rather than a
-   global 64-bit machine widening. A recognizer matches the exact decoded slice:
-   a zero-extended 32-bit source, a fixed magic multiplier, a high-word or
-   right-shift extraction, and the final subtract/adjust sequence when the
-   compiler emits one. The renderer emits the corresponding source-level
-   quotient expression only when a theorem records the magic constant, shift,
-   rounding mode, and input range. A broad `UInt64` lane remains useful later,
-   but it would widen every SSA/type path before the project has one proven
-   reciprocal-division case. The first closure target is an isolated unsigned
-   divide-by-constant fixture whose assembly contains the `imul r64; shr` idiom;
-   `pow_uint` and `is_prime` follow after the recognizer handles surrounding
-   loop/control-flow structure.
-
-3. Chained branch-phi resolution. Impact: medium STRICT coverage and high gate
+1. Chained branch-phi resolution. Impact: medium STRICT coverage and high gate
    soundness sensitivity. The current `simpleDiamondPhiExpr` resolves one branch
    diamond by proving which reaching definition comes from the taken arm and
    which comes from the fallthrough arm. `subOf` and the block-entry phi
@@ -93,7 +63,7 @@ effort.
    This design preserves the current safety property: unresolved control-flow
    joins stay explicit refusals instead of becoming guessed locals.
 
-4. Loop oracle proof. Impact: formal assurance only, with no runtime STRICT
+2. Loop oracle proof. Impact: formal assurance only, with no runtime STRICT
    change. `sumLoop_snd_double` and `sumLoop_inv_double` in
    `FlowrefDecompiler/IL.lean` have `sorry` stubs. The induction step for
    `sumLoop_snd_double` is the first blocker: after `simp only [sumLoop]` and
@@ -120,7 +90,7 @@ effort.
    declarations and no change to the runtime oracle result; this remains a
    formal proof-track gap only because emitted C is already checked dynamically.
 
-5. Constraint-based type propagation. Impact: dependency unblocking for future
+3. Constraint-based type propagation. Impact: dependency unblocking for future
    memory work, with no immediate STRICT change. Values used as pointer base
    addresses in `[reg+offset]` operands are not tagged as pointer types. All
    variables emit as `uint32_t`. The missing piece is a constraint pass that
@@ -143,7 +113,7 @@ effort.
    fixture whose C becomes clearer without changing strict acceptance or oracle
    counts.
 
-6. Variable coalescing. Impact: readability only. `eax_0`/`eax_1` SSA names are
+4. Variable coalescing. Impact: readability only. `eax_0`/`eax_1` SSA names are
    not collapsed into a single source-like local when live ranges do not overlap.
    Output is correct but verbose. The missing piece is a liveness-aware coalescer
    that runs after faithful SSA construction and before C rendering, preserving

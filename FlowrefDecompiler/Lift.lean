@@ -202,8 +202,12 @@ def fuse (argRegs : List String) (cmp : Option (String × String)) (facts : Path
       -- `test reg, reg` followed by `je` means reg == 0 on taken edge, reg != 0 on fallthrough
       let ops := (i.ops.splitOn ",").map (·.trimAscii.toString)
       match ops with
-      | [r1, r2] => if r1 == r2 then fuse argRegs (@Option.some String (canonReg r1)) facts rest else fuse argRegs (@Option.none String) facts rest
-      | _ => fuse argRegs (@Option.none String) facts rest
+      | [r1, r2] =>
+        -- `test r,r` is a zero-test: record both operands so the branch below can
+        -- read the register. Other `test a,b` forms carry no zero fact.
+        if r1 == r2 then fuse argRegs (some (canonReg r1, canonReg r1)) facts rest
+        else fuse argRegs none facts rest
+      | _ => fuse argRegs none facts rest
     else if i.mn == "call" then
       let callee := i.ops.trimAscii.toString
       (fuse argRegs Option.none facts rest).map (SInsn.call callee argRegs :: ·)
@@ -219,11 +223,16 @@ def fuse (argRegs : List String) (cmp : Option (String × String)) (facts : Path
       -- Branch instructions: extract path facts from preceding cmp/test (Gap 1)
       -- For `cmp reg, 0` or `test reg, reg` followed by `je`, the fallthrough has fact (reg != 0)
       let newFacts : PathFactLattice := match cmp with
-        | Option.some reg =>  -- test reg, reg
-          match i.mn with
-          | "je" | "jz" => PathFactLattice.add facts (IL.PathFact.nonzero reg)  -- fallthrough: reg != 0
-          | "jne" | "jnz" => PathFactLattice.add facts (IL.PathFact.zero reg)   -- fallthrough: reg == 0
-          | _ => facts
+        | Option.some (op1, op2) =>
+          -- Only a genuine zero-test yields a zero/nonzero fact: `test r,r`
+          -- (op1 == op2) or `cmp r, 0` (op2 == "0"). A general `cmp a,b` compares
+          -- two values and says nothing about either being zero.
+          if op1 == op2 || op2 == "0" then
+            match i.mn with
+            | "je" | "jz" => PathFactLattice.add facts (IL.PathFact.nonzero op1)  -- fallthrough: reg != 0
+            | "jne" | "jnz" => PathFactLattice.add facts (IL.PathFact.zero op1)   -- fallthrough: reg == 0
+            | _ => facts
+          else facts
         | Option.none => facts  -- no preceding cmp/test, no new facts
       (insToS i).bind (fun ss => (fuse argRegs Option.none newFacts rest).map (ss ++ ·))
     else

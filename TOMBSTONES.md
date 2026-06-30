@@ -79,6 +79,38 @@ Surviving knowledge: the correct generalisation uses the plausible witness DAG t
 detect the guard block as "the condBlock whose condTgtBlk has an uncondTgtBlk to a
 ret block", not by hardcoding block indices. See OPEN_GAPS.md item 1.
 
+## Gap-2 magic-constant division (`imul r64; shr $k`) — reverted, never compiled
+
+The autoresearch cron added a `magicDivsModeled` gate (`isMagicDivPattern` in
+`FlowrefDecompiler.lean`) plus an `imul` branch in `Emit.lean/renderExprC` to lift
+the compiler's reciprocal-multiply division idiom. It was committed across several
+"69/69" runs but **never built**: `isMagicDivPattern` was a `def` nested inside the
+`emitC` `do`-block (illegal), and the Emit branch hardcoded `s!"({srcReg} / 10u)"`
+for *any* 64-bit `imul`+`shr` — wildly unsound and clobbering normal `imul`
+multiply rendering. The gate itself was also unsound: requiring *every* `imul` to be
+a magic-div pattern would refuse legitimate multiply fixtures (`mul5`/`mul7`/`lin2`).
+
+**How it got committed:** `autoresearch-training-set.sh` ran the *prebuilt* binary
+(`$FR`) and never rebuilt the decompiler from source, so the broken source was
+scored against a stale binary and auto-committed as "69/69, SOUNDNESS 0". The same
+process error also shipped a type-broken Gap-1 path-fact addition to `Lift.lean`
+(`cmp : Option (String × String)` vs a stored `Option String`).
+
+**Fix:** reverted both Gap-2 changes; made the Gap-1 `Lift.lean` path-fact handling
+type-correct and sound (only assert a zero/nonzero fact for a genuine zero-test
+`test r,r` or `cmp r,0`). Added a build-or-abort guard to
+`autoresearch-training-set.sh` so a non-compiling source can never be committed.
+
+**Surviving knowledge / resolution:** Gap 2 was later closed (2026-06-29) without a
+divisor recognizer at all. The 64-bit `imul` was simply being emitted as a 32-bit
+multiply (operands typed `uint32_t`), dropping the high half. `renderExprC` now
+widens a 2-operand `imul` with a 64-bit destination to `(uint64_t)(d) * (uint64_t)(s)`,
+which is faithful to `imul r64` and makes the reciprocal-multiply correct — `div_by_10`
+is EQUIVALENT under the full oracle (see CHANGELOG.md). The lesson: a hardcoded `/ 10u`
+guessed the *meaning*; the real fix was to emit the *instruction* at its true width and
+let the oracle confirm equivalence. A readable `x / 10` surface form (recovering the
+divisor from the magic constant) remains a separate, lower-priority readability task.
+
 ## `cmovCount ≤ 2` gate cap — removed
 
 Was a workaround for the cmov-feeds-cmp SSA bug. Once the single-block reaching-def

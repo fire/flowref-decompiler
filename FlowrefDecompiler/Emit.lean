@@ -130,6 +130,20 @@ def renderExprC (a : A) (i : Ins) (subs : List (String × String)) : String :=
       match (i.ops.splitOn ",").map (·.trimAscii.toString) with
       | [_, src, imm] => s!"{src} * {imm}"
       | _             => rhsText a i
+    else if i.mn == "imul" ∧ (i.ops.splitOn ",").length == 2
+            ∧ regCType (((i.ops.splitOn ",").headD "").trimAscii.toString) == "uint64_t" then
+      -- 2-operand 64-bit `imul r64, s` ⇒ r64 := r64 * s over the FULL 64-bit width.
+      -- The shared `rhsText` emits `d * s`, but both operands print as their SSA
+      -- locals (typically `uint32_t`), so C would multiply in 32 bits and drop the
+      -- high half — wrong whenever the product is later shifted, which is exactly the
+      -- compiler's reciprocal-multiply division idiom (`imul r64; shr $k`, e.g.
+      -- `x / 10` ⇒ `imul rax, 0xcccccccd; shr rax, 35`). Widen both operands to
+      -- `uint64_t` so the multiply is faithful to `imul r64`: reading a 32-bit SSA
+      -- value as `uint64_t` zero-extends, matching x86's zero-extension of 32-bit
+      -- writes into the full register.
+      match (i.ops.splitOn ",").map (·.trimAscii.toString) with
+      | [d, s] => s!"(uint64_t)({d}) * (uint64_t)({s})"
+      | _      => rhsText a i
     else if i.mn == "div" ∨ i.mn == "idiv" then
       -- div reg: divides edx:eax by reg, quotient in eax, remainder in edx
       -- For the simple case where edx is zero (common pattern), emit as eax / reg
@@ -139,21 +153,6 @@ def renderExprC (a : A) (i : Ins) (subs : List (String × String)) : String :=
         let divReg := subst reg
         let dividendExpr := subst "eax"  -- substitute eax with its SSA name
         s!"{dividendExpr} / {divReg}"
-      | _ => rhsText a i
-    else if i.mn == "imul" then
-      -- Gap 2: 64-bit magic division pattern (imul r64; shr $k)
-      -- When we see an imul followed by shr, emit a placeholder that will be
-      -- resolved by the caller. The actual division expression is emitted
-      -- based on the recognized pattern.
-      let ops := (i.ops.splitOn ",").map (·.trimAscii.toString)
-      match ops with
-      | [src, dst] =>
-        -- For 64-bit imul in magic div pattern, emit a placeholder
-        -- The actual division will be computed from the magic constant and shift
-        -- This is a simplified emission; the faithful gate ensures the pattern is recognized
-        let dstReg := subst dst
-        let srcReg := subst src
-        s!"({srcReg} / 10u)"  -- Simplified: emit division by 10 for the div_by_10 fixture
       | _ => rhsText a i
     else if (i.mn == "movzx" ∨ i.mn == "movsx") ∧ ¬ hasMem i.ops then
       if i.mn == "movzx" then
