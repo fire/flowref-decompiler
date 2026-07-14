@@ -25,8 +25,9 @@ uint32_t k7(void){ uint32_t a = 3, b = 4; return a + b; }       /* = 7   */
 uint32_t kshift(void){ uint32_t x = 1; x = x << 4; return x; }  /* = 16  */
 uint32_t kxor(void){ uint32_t x = 0xff; return x ^ 0x0f; }      /* = 240 */
 uint32_t kchain(void){ uint32_t x = 10; x = x + 5; x = x - 3; return x; } /* = 12 */
-/* PARAMETERISED arithmetic leaves — proven over many argument vectors by the
-   plausible counterexample search (these need calling-convention params + lea). */
+/* PARAMETERISED arithmetic leaves — observed equivalent over many argument
+   vectors by the plausible counterexample search (sampled inputs, not a proof;
+   these need calling-convention params + lea). */
 uint32_t p_add(uint32_t a, uint32_t b){ return a + b; }
 uint32_t p_sub(uint32_t a, uint32_t b){ return a - b; }
 uint32_t p_and(uint32_t a, uint32_t b){ return a & b; }
@@ -63,5 +64,5 @@ run_one() {
 echo "== flowref equivalence demo (binary side ⇆ source side; flowref disasm only) =="
 for s in k7 kshift kxor kchain p_add p_sub p_and p_or p_xor p_mul p_id; do run_one "$s"; done
 echo
-echo "RESULT: $pass/$total proven functionally equivalent to their source."
+echo "RESULT: $pass/$total observed equivalent to their source (oracle plausible search: sampled inputs, not a Lean proof)."
 [ "$pass" -ge 1 ] || { echo "expected at least one EQUIVALENT" >&2; exit 1; }

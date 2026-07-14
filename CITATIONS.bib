@@ -50,11 +50,34 @@
                {\tt CommRing} instance (available in Mathlib $\ge$~4.26).}
 }
 
-@software{hotz2026tinygrad
+@software{hotz2026tinygrad,
   title        = {tinygrad},
   author       = {Hotz, George and contributors},
   year         = {2026},
   version      = {0.13.0},
   url          = {https://github.com/tinygrad/tinygrad},
   note         = {Accessed 2026-06-18; project site: \url{https://tinygrad.org/}}
+}
+
+% Epistemic-model influence for the faithful-or-refuse contract (I0). REA is an
+% agent-facing reverse-engineering toolkit whose Evidence model keeps three
+% distinct categories — observation, inference, and unknown — and, crucially,
+% "treats omitted evidence as unknown rather than equivalent"; its comparison
+% engine labels every difference a *behavior candidate* instead of inferring
+% equivalence from co-change. flowref borrows that discipline as a naming rule:
+% the oracle's `INCOMPARABLE` (refused lift) is an UNKNOWN, never a false
+% `EQUIVALENT`, and the oracle's `EQUIVALENT` is a *sampled-domain observation*
+% (boundary battery + random sweep in `EquivCheck.lean`), distinct from a
+% machine-checked Lean *proof*. See the "epistemic categories" durable rule in
+% CHANGELOG.md.
+@software{morluto2026rea,
+  author    = {{morluto}},
+  title     = {{REA}: Reverse Engineer Anything},
+  year      = {2026},
+  url       = {https://github.com/morluto/rea},
+  note      = {MIT-licensed. Accessed 2026-07-14. Agent-facing decompilation and
+               behavioral-comparison toolkit (CLI + MCP). Relevant to flowref: the
+               observation/inference/unknown Evidence model and the
+               "omitted evidence is unknown, not equivalent" comparison rule,
+               which mirror flowref's faithful-or-refuse gate.}
 }

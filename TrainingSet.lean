@@ -39,24 +39,24 @@ def main (args : List String) : IO Unit := do
       copyParquet s!"SELECT * FROM {resultsRel}" resultsOut
       copyParquet
         (s!"SELECT count(*) AS total, " ++
-         s!"sum(CASE WHEN verdict='EQUIVALENT' THEN 1 ELSE 0 END) AS proven, " ++
+         s!"sum(CASE WHEN verdict='EQUIVALENT' THEN 1 ELSE 0 END) AS observed_equivalent, " ++
          s!"sum(CASE WHEN verdict='NOT-EQUIVALENT' THEN 1 ELSE 0 END) AS soundness_violations, " ++
          s!"sum(CASE WHEN unsafe_compiles='yes' THEN 1 ELSE 0 END) AS unsafe_compiles " ++
          s!"FROM {resultsRel}")
         summaryOut
       copyParquet
         ("SELECT * FROM (VALUES " ++
-         "('H1','single-block memory','Lower memory operands after oracle-proven load/store C shape','strict_proven_delta')," ++
-         "('H2','general calls','Lift call result followed by ALU combine with uninterpreted callee summary','strict_proven_delta')," ++
-         "('H3','control flow','Widen compact branch diamonds only after binary oracle equivalence','strict_proven_delta')," ++
+         "('H1','single-block memory','Lower memory operands after oracle-observed load/store C shape','strict_observed_delta')," ++
+         "('H2','general calls','Lift call result followed by ALU combine with uninterpreted callee summary','strict_observed_delta')," ++
+         "('H3','control flow','Widen compact branch diamonds only after binary oracle equivalence','strict_observed_delta')," ++
          "('H4','harness hygiene','Keep fixture inventory, materialized binaries, and oracle results in one reproducible Parquet snapshot','drift_reduction')" ++
          ") AS t(hypothesis_id, area, claim, metric)")
         hypothesesOut
 
       let total ← scalar s!"SELECT count(*) FROM {resultsRel}"
-      let proven ← scalar s!"SELECT sum(CASE WHEN verdict='EQUIVALENT' THEN 1 ELSE 0 END) FROM {resultsRel}"
+      let observed ← scalar s!"SELECT sum(CASE WHEN verdict='EQUIVALENT' THEN 1 ELSE 0 END) FROM {resultsRel}"
       let violations ← scalar s!"SELECT sum(CASE WHEN verdict='NOT-EQUIVALENT' THEN 1 ELSE 0 END) FROM {resultsRel}"
-      IO.println s!"training parquet snapshot: {proven}/{total} proven, soundness violations={violations}"
+      IO.println s!"training parquet snapshot: {observed}/{total} observed-equivalent, soundness violations={violations}"
       IO.println s!"  {manifestOut}"
       IO.println s!"  {resultsOut}"
       IO.println s!"  {summaryOut}"

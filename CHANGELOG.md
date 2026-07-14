@@ -9,6 +9,21 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
   unmodeled instruction ⇒ refuse (hard error, nothing on stdout). Widen the gate
   ONLY after the equivalence oracle proves the new lift EQUIVALENT. `algo-bench.sh`
   must always report `SOUNDNESS: 0`.
+- Three epistemic categories (observation / proof / unknown). Borrowed from REA's
+  Evidence model (see `CITATIONS.bib` `morluto2026rea`): omitted evidence is
+  UNKNOWN, never EQUIVALENT. Keep the three verdicts honestly separated. `INCOMPARABLE`
+  (a refused lift) is an UNKNOWN — the correct answer when flowref cannot model the
+  input, never silently treated as equal. The oracle's `EQUIVALENT` is a *sampled-domain
+  observation* (the boundary battery + random sweep in `EquivCheck.lean` found no
+  divergence), which is strictly weaker than a machine-checked Lean *proof* (e.g.
+  `IL.lean`'s `addLoop_correct` / `*_render` theorems, which the kernel discharges
+  in full). When a report or comment must call a lift "proven", it means a Lean
+  theorem discharged it with no `sorry`/`axiom`; a passing oracle run is
+  "observed-equivalent". Applying this rule to our own proofs: `IL.lean`'s
+  `sumLoop_snd_double`/`sumLoop_inv_double` are oracle-*observed* over 0..65535 but
+  NOT machine-proven (a BitVec ring tactic is missing), so they are named `_observed`
+  and stated as explicit `axiom`s, never dressed up as proven `theorem`s. Never let a
+  bench summary's — or a declaration keyword's — wording promote an observation to a proof.
 - Verify + commit discipline. Every change is checked with `lake build
   flowref-decompiler` AND `./decompile-bench/algo-bench.sh` (SOUNDNESS 0); commit
   each green step.

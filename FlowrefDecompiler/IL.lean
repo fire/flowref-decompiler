@@ -509,24 +509,23 @@ theorem sumLoop_fst (k : Nat) (i s : Word) :
   | zero => simp [sumLoop]
   | succ n ih => simp only [sumLoop]; rw [ih]; bv_omega
 
-/-- sumLoop accumulator invariant (shape contract, sorry stub).
-    The induction step is bilinear in BitVec (k * i term), which bv_omega cannot
-    close. A ring tactic for BitVec (not yet in std4/Mathlib) is needed.
-    The statement is correct: verified by the oracle on inputs 0..65535. -/
-theorem sumLoop_snd_double (k : Nat) (i s : Word) :
-    2 * (sumLoop k (i, s)).2 = 2 * s + BitVec.ofNat 32 k * (2 * i + BitVec.ofNat 32 k - 1) := by
-  induction k generalizing i s with
-  | zero => simp [sumLoop]
-  | succ n ih =>
-    simp only [sumLoop]
-    rw [ih]
-    -- TODO: needs ring tactic for BitVec bilinear arithmetic
-    sorry
+/-- sumLoop accumulator invariant — OBSERVED, NOT PROVEN.
+    Stated as an `axiom` (not a `theorem := sorry`) on purpose: this is a
+    sampled-domain OBSERVATION, not a machine-checked proof, so it must not wear
+    the `theorem` keyword (see the epistemic-categories rule in CHANGELOG.md,
+    borrowed from REA). The oracle finds no counterexample over inputs 0..65535,
+    but the induction step is bilinear in BitVec (the `k * i` term) which
+    `bv_omega` cannot close and which needs a BitVec ring tactic not yet in
+    std4/Mathlib. `#print axioms` surfaces it as an assumption; nothing in the
+    decompiler/oracle pipeline depends on it. -/
+axiom sumLoop_snd_double_observed (k : Nat) (i s : Word) :
+    2 * (sumLoop k (i, s)).2 = 2 * s + BitVec.ofNat 32 k * (2 * i + BitVec.ofNat 32 k - 1)
 
-/-- After k iterations from (1, 0): 2*s = k*(k+1) mod 2^32. (sorry stub) -/
-theorem sumLoop_inv_double (k : Nat) :
-    2 * (sumLoop k (1, 0)).2 = BitVec.ofNat 32 k * (BitVec.ofNat 32 k + 1) := by
-  sorry
+/-- After k iterations from (1, 0): 2*s = k*(k+1) mod 2^32 — OBSERVED, NOT PROVEN
+    (same epistemic status as `sumLoop_snd_double_observed`: an `axiom`, oracle-
+    checked over 0..65535, awaiting a BitVec ring tactic). -/
+axiom sumLoop_inv_double_observed (k : Nat) :
+    2 * (sumLoop k (1, 0)).2 = BitVec.ofNat 32 k * (BitVec.ofNat 32 k + 1)
 
 /-- Loop state for factorial: (i, p) after k iterations from (2, 1).
     The body is: p *= i; i += 1. -/

@@ -105,12 +105,13 @@ $ ./equiv-demo.sh
   kxor   (...): EQUIVALENT  (both return 240)
   kchain (...): EQUIVALENT  (both return 12)
 
-RESULT: 4/4 proven functionally equivalent to their source.
+RESULT: 4/4 observed equivalent to their source (oracle plausible search: sampled inputs, not a Lean proof).
 ```
 
 Each function is compiled to an object (the binary side), flowref's own
-disassembler lifts its byte region, and the recovered C is proven to return the
-same value as the source. This is the full methodology end-to-end on a class
+disassembler lifts its byte region, and the recovered C is *observed* to return
+the same value as the source over the oracle's sampled input domain (a plausible
+counterexample search, not a machine-checked proof). This is the full methodology end-to-end on a class
 flowref can model today.
 
 ## Honest limits (what "win" does *not* yet cover)

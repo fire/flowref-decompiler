@@ -64,10 +64,14 @@ effort.
    joins stay explicit refusals instead of becoming guessed locals.
 
 2. Loop oracle proof. Impact: formal assurance only, with no runtime STRICT
-   change. `sumLoop_snd_double` and `sumLoop_inv_double` in
-   `FlowrefDecompiler/IL.lean` have `sorry` stubs. The induction step for
-   `sumLoop_snd_double` is the first blocker: after `simp only [sumLoop]` and
-   `rw [ih]`, the goal contains the bilinear polynomial
+   change. `sumLoop_snd_double_observed` and `sumLoop_inv_double_observed` in
+   `FlowrefDecompiler/IL.lean` are honestly stated as `axiom`s (OBSERVED over
+   inputs 0..65535, not machine-proven — the `_observed` suffix and `axiom`
+   keyword keep the epistemic status truthful per the CHANGELOG rule, rather than
+   hiding a `theorem := sorry`). Closing this gap means PROVING them and demoting
+   the axioms to `theorem`s. The induction step for
+   `sumLoop_snd_double_observed` is the first blocker: after `simp only [sumLoop]`
+   and `rw [ih]`, the goal contains the bilinear polynomial
    `k * (2*i + k - 1)` over `BitVec 32`. `bv_omega` is linear, and
    `bv_decide` abstracts the non-linear term too coarsely, so neither tactic is
    the right backend.
@@ -84,9 +88,10 @@ effort.
 
    The implementation shape is narrow: first add a tiny scratch theorem that
    proves the post-`rw [ih]` polynomial identity over `BitVec 32` with `grind`,
-   then use that theorem in `sumLoop_snd_double`, then specialize it at
-   `(i, s) = (1, 0)` to discharge `sumLoop_inv_double`. The closure signal is
-   `lake build FlowrefDecompiler.IL` with no `sorry` warnings for those two
+   then use that theorem to prove `sumLoop_snd_double` (as a real `theorem`,
+   replacing the `axiom`), then specialize it at `(i, s) = (1, 0)` to discharge
+   `sumLoop_inv_double`. The closure signal is `#print axioms sumLoop_snd_double`
+   showing only the standard kernel axioms (no `_observed` assumption) for those two
    declarations and no change to the runtime oracle result; this remains a
    formal proof-track gap only because emitted C is already checked dynamically.
 
@@ -136,9 +141,12 @@ effort.
 
 ## Known latent caveats
 
-- `sumLoop_snd_double` in `IL.lean` carries a `sorry` — the loop accumulator
-  closed-form proof is incomplete (bilinear BitVec). Does not affect runtime
-  soundness; oracle verifies dynamically.
+- `sumLoop_snd_double_observed` / `sumLoop_inv_double_observed` in `IL.lean` are
+  `axiom`s, not proofs — the loop accumulator closed-form is OBSERVED (oracle-
+  checked over 0..65535), not machine-proven (bilinear BitVec needs a ring
+  tactic). Named `_observed` and kept as axioms so the status is honest; visible
+  via `#print axioms`. Does not affect runtime soundness; oracle verifies
+  dynamically.
 - Variable-shift lifts (`a0 >> a1`) are UB-reliant in C but sound under the
   oracle's compiled-candidate-vs-binary contract.
 - The autoresearch systemd timer is stopped. The Hermes cron fires every 5 min.
