@@ -92,7 +92,7 @@ rows = list(csv.DictReader(open(sys.argv[1]), delimiter='\t'))
 proven    = sum(r['verdict'] == 'EQUIVALENT'     for r in rows)
 viol      = sum(r['verdict'] == 'NOT-EQUIVALENT' for r in rows)
 unsafe    = sum(r['unsafe_compiles'] == 'yes'    for r in rows)
-print(f"STRICT  : {proven}/{len(rows)} proven EQUIVALENT")
+print(f"STRICT  : {proven}/{len(rows)} observed-equivalent")
 print(f"UNSAFE  : {unsafe}/{len(rows)} emit C that compiles")
 print(f"SOUNDNESS: {viol} violations")
 PY
@@ -106,7 +106,7 @@ if printf '%s\n' "$summary" | grep -q "SOUNDNESS: 0 violations"; then
   if [ -n "$dirty" ]; then
     proven=$(printf '%s\n' "$summary" | grep '^STRICT' | awk '{print $3}')
     git add -u
-    git commit -m "Autoresearch run $RUN_ID: $proven proven EQUIVALENT, SOUNDNESS 0"
+    git commit -m "Autoresearch run $RUN_ID: $proven observed-equivalent, SOUNDNESS 0"
     echo "committed run $RUN_ID"
   else
     echo "nothing to commit for run $RUN_ID"

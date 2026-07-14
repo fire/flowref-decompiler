@@ -23,8 +23,11 @@ require LeanSlang from git
   "https://github.com/V-Sekai-fire/lean-slang" @ "main"
 
 -- ETNF corpus normalisation writes Decompile-Bench rows to Parquet through
--- DuckDB. This dependency is intentionally used only by the flowref-etnf executable
--- below; the production decompiler/oracle targets do not import it.
+-- DuckDB, statically linked from a self-contained archive that lean_duckdb builds
+-- from the DuckDB C amalgamation SOURCE on a plain `lake build` (no prebuilt
+-- binary, no libduckdb.so). This dependency is used only by the flowref-etnf /
+-- flowref-training-parquet executables below; the production decompiler/oracle
+-- targets do not import it (the shim's DuckDB symbols are never pulled into them).
 require lean_duckdb from git
   "https://github.com/v-sekai-multiplayer-fabric/lean-duckdb" @ "main"
 
@@ -34,11 +37,11 @@ require lean_duckdb from git
 
 @[default_target] lean_exe «flowref-decompiler» where
   root := `FlowrefDecompiler
-  -- Link the multi-arch Capstone static archive vendored by lean-capstone (a
+  -- Link the multi-arch Capstone static archive built by lean-capstone (a
   -- transitive dependency via fire/flowref). Grouped so the disassembler shim's
-  -- cs_* symbols resolve against libcapstone.a. After `lake update`, run the
-  -- dep's build.sh once to produce the archive:
-  --   .lake/packages/lean-capstone/thirdparty/capstone/build.sh
+  -- cs_* symbols resolve against libcapstone.a. The archive is built FROM SOURCE
+  -- one-stop by the Lean/Lake build system (cc + ar, no cmake) on a plain
+  -- `lake build` — no manual step; see lean-capstone's `capstoneShimO` target.
   moreLinkArgs := #[
     "-Wl,--start-group",
     ".lake/packages/lean-capstone/thirdparty/capstone/lib/libcapstone.a",
@@ -73,10 +76,15 @@ extern_lib libequivdl pkg := do
 -- target so `lake build` for the decompiler/oracle remains decoupled from DuckDB.
 lean_exe «flowref-etnf» where
   root := `Etnf
+  -- Static-link the ENCAPSULATED DuckDB archive (built from the C amalgamation by
+  -- lean_duckdb): DuckDB's GNU C++ runtime is whole-archived in and every symbol
+  -- but the `duckdb_*` C API is localized, so it does not collide with Lean's
+  -- libc++abi. No libduckdb.so, no rpath, no libstdc++/libc++ flags needed.
   moreLinkArgs := #[
-    "-L.lake/packages/lean_duckdb/vendor", "-lduckdb",
-    "-Wl,-rpath,$ORIGIN", "-Wl,-rpath,$ORIGIN/../../../packages/lean_duckdb/vendor",
-    "-Wl,-rpath,.lake/packages/lean_duckdb/vendor"
+    "-Wl,--start-group",
+    ".lake/packages/lean_duckdb/vendor/libduckdb.a",
+    "-Wl,--end-group",
+    "-lm", "-ldl", "-lpthread"
   ]
 
 -- AutoResearch-style training-set snapshots: manifest + oracle results +
@@ -84,8 +92,10 @@ lean_exe «flowref-etnf» where
 -- Parquet writer/query engine; no persistent database is created.
 lean_exe «flowref-training-parquet» where
   root := `TrainingSet
+  -- Static-link the ENCAPSULATED DuckDB archive (see flowref-etnf above).
   moreLinkArgs := #[
-    "-L.lake/packages/lean_duckdb/vendor", "-lduckdb",
-    "-Wl,-rpath,$ORIGIN", "-Wl,-rpath,$ORIGIN/../../../packages/lean_duckdb/vendor",
-    "-Wl,-rpath,.lake/packages/lean_duckdb/vendor"
+    "-Wl,--start-group",
+    ".lake/packages/lean_duckdb/vendor/libduckdb.a",
+    "-Wl,--end-group",
+    "-lm", "-ldl", "-lpthread"
   ]

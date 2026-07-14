@@ -159,7 +159,7 @@ def main (argv : List String) : IO Unit := do
       IO.println s!"NOT-EQUIVALENT  (divergent args {v.toList.take (max ar 1)}, arity {ar})"
       IO.Process.exit 1
     | none =>
-      IO.println s!"EQUIVALENT  (no divergence; boundary battery + {rnd} random full-range vectors, arity {ar})"
+      IO.println s!"EQUIVALENT  (observed: no divergence over boundary battery + {rnd} random full-range vectors, arity {ar}; sampled-domain observation, not a Lean proof)"
   | _ =>
     IO.eprintln "usage: flowref-equiv <binary> <arch> <fnVaddrHex> <fileOffHex> <vaddrHex> <lenHex>"
     IO.Process.exit 2

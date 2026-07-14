@@ -141,15 +141,17 @@ echo "== 12. Decompile-Bench equivalence oracle (return-SSA wiring) =="
 if "$GCC" -O1 -fcf-protection=none -c -xc /dev/null -o /tmp/flowref-cc-probe.o 2>/dev/null; then
   rm -f /tmp/flowref-cc-probe.o
   ./decompile-bench/equiv-demo.sh | tee /tmp/flowref-equiv.out
-  grep -q "RESULT: 11/11 proven" /tmp/flowref-equiv.out || fail "equivalence demo regressed"
+  grep -q "RESULT: 11/11 observed equivalent" /tmp/flowref-equiv.out || fail "equivalence demo regressed"
   rm -f /tmp/flowref-equiv.out
-  pass "flowref C proven equivalent to source via plausible search (11/11: constants + parameterised arithmetic)"
+  pass "flowref C observed equivalent to source via plausible search (11/11: constants + parameterised arithmetic; sampled inputs, not a proof)"
 else
   echo "skip: C compiler cannot build the equivalence demo"
 fi
 
 echo "== 13. ETNF Parquet(zstd) normaliser (lean-duckdb) =="
-DUCKLIB=".lake/packages/lean_duckdb/vendor/libduckdb.so"
+# Static archive built from the DuckDB C amalgamation (no libduckdb.so). A plain
+# `lake build flowref-etnf` builds it on demand; treat its presence as the gate.
+DUCKLIB=".lake/packages/lean_duckdb/vendor/libduckdb.a"
 if [ -f "$DUCKLIB" ]; then
   lake build flowref-etnf || fail "flowref-etnf build"
   ETOUT="$(mktemp -d /tmp/flowref-etnf.XXXXXX)"
@@ -161,7 +163,7 @@ if [ -f "$DUCKLIB" ]; then
   rm -rf "$ETOUT"
   pass "ETNF relations written + lossless-join verified"
 else
-  echo "skip: libduckdb not vendored ($DUCKLIB) — run 'lake update lean_duckdb'"
+  echo "skip: libduckdb not vendored ($DUCKLIB) — run 'lake build flowref-etnf' to build it from the amalgamation"
 fi
 
 echo "== 13b. AutoResearch training-set Parquet snapshot (lean-duckdb) =="
@@ -181,7 +183,7 @@ if [ -f "$DUCKLIB" ]; then
   rm -rf "$TROOT"
   pass "training manifest/results/summary/hypotheses written as Parquet"
 else
-  echo "skip: libduckdb not vendored ($DUCKLIB) — run 'lake update lean_duckdb'"
+  echo "skip: libduckdb not vendored ($DUCKLIB) — run 'lake build flowref-etnf' to build it from the amalgamation"
 fi
 
 echo "== 14. ELF resolution (self-contained FFI): list + symbol/address short forms =="

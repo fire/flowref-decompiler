@@ -5,7 +5,8 @@
 # branch-shape fixtures (one function per file), so we own the ground truth. For
 # each file this compiles it to its own object, then reports:
 #   STRICT : the equivalence oracle's verdict on flowref's faithful-or-refuse
-#            lift — EQUIVALENT (proven) / INCOMPARABLE (refused, never wrong).
+#            lift — EQUIVALENT (observed over a sampled input domain, not a Lean
+#            proof) / INCOMPARABLE (refused = unknown, never wrong).
 #   UNSAFE : whether flowref's --unsafe best-effort C at least compiles
 #            (syntax-correct C), a coverage signal for the refused class.
 #
@@ -103,7 +104,7 @@ for f in $FUNCS; do
 done
 
 echo
-echo "STRICT  : $proven/$total proven EQUIVALENT (machine-checked)"
+echo "STRICT  : $proven/$total observed-equivalent (oracle: sampled domain, not a proof)"
 echo "UNSAFE  : $unsafe_ok/$total emit C that compiles (best-effort coverage signal)"
 if [ "$violations" -gt 0 ]; then
   echo "SOUNDNESS: $violations/$total strict lifts were NOT-EQUIVALENT — flowref emitted"

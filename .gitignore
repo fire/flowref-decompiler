@@ -8,3 +8,4 @@
 /decompile-bench/sample.ndjson
 /decompile-bench/etnf/
 /decompile-bench/out/
+erl_crash.dump
