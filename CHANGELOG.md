@@ -40,9 +40,12 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
 - Minimal executable machine first. Follow the tinygrad-style insight: encode
   executable semantics through a small canonical machine/IL, not by solving every
   architecture independently. Architecture adapters feed the same core. The
-  Capstone-wide mapping contract lives in
-  `FlowrefDecompiler/CanonicalMachine.lean`; adding a new Capstone arch upstream
-  should make that exhaustive mapping fail to compile until it is classified.
+  canonical-machine ISA table (keyed on flowref's own dependency-free `Isa` port)
+  lives in the hexagon CORE `FlowrefDecompiler/CanonicalMachine.lean`, which
+  imports no disassembly engine; the `Capstone.Arch → Isa` translation lives in
+  the ADAPTER `FlowrefDecompiler/CapstoneArch.lean` (the only module that imports
+  Capstone). Adding a new Capstone arch upstream makes that adapter's total match
+  fail to compile until the arch is classified into an `Isa`.
 
 ## Done — production decompiler (faithful-or-refuse)
 
@@ -146,11 +149,14 @@ dead ends → `TOMBSTONES.md`. Each fact lives in exactly one of the three.
   proofs (decode→IL→bv_decide) for: lock, lea-add, mem load, store/load aliasing,
   succ, umax/umin (cmp+cmov), forwarding call (`apply_f`), call composed with ALU
   (`g(x)+x`), and setcc+movzx comparison (`cmp;setb;movzx;ret → (a<b)?1:0`).
-- `FlowrefDecompiler/CanonicalMachine.lean` — exhaustive `Capstone.Arch` →
-  canonical-machine/IL mapping table for all 23 architectures exposed by
-  lean-capstone. Every row, including x86 and PPC, is the same kind of explicit
-  adapter contract into the small IL; production maturity is not encoded as a
-  privileged architecture class.
+- `FlowrefDecompiler/CanonicalMachine.lean` (hexagon CORE) — the canonical-
+  machine/IL mapping table for all 23 architectures, keyed on flowref's own
+  dependency-free `Isa` port; imports no disassembly engine. The
+  `Capstone.Arch → Isa` translation is the hexagon ADAPTER
+  `FlowrefDecompiler/CapstoneArch.lean` (the sole importer of Capstone), whose
+  total match is the "classify every Capstone arch" coverage tripwire. Every row,
+  including x86 and PPC, is the same kind of explicit adapter contract into the
+  small IL; production maturity is not encoded as a privileged architecture class.
 - **lean-slang** (`V-Sekai-fire/lean-slang`, owned): Slang AST + BitVec semantics +
   libslang FFI (in-process SPIR-V via `dlmopen`); `slangcheck` compiles all fixtures
   end-to-end. `LeanSlang.SIMT` proves data-parallel kernel correctness = per-thread
